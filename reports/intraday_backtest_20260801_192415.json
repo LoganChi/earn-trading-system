@@ -1,0 +1,81 @@
+{
+  "intraday": {
+    "total_trades": 194,
+    "win_count": 99,
+    "loss_count": 95,
+    "win_rate": 51.0,
+    "avg_profit": 0.33,
+    "avg_win": 8.49,
+    "avg_loss": -8.18,
+    "pl_ratio": 1.04,
+    "avg_holding_days": 7.1,
+    "total_return": 63.46,
+    "avg_giveback": 54.1,
+    "max_single_profit": 22.05,
+    "max_single_loss": -14.27,
+    "reasons": {
+      "超时平仓": {
+        "count": 23,
+        "win_rate": 69.6,
+        "avg_pnl": 1.52
+      },
+      "分时红柱拐头": {
+        "count": 82,
+        "win_rate": 100.0,
+        "avg_pnl": 9.42
+      },
+      "止损": {
+        "count": 88,
+        "win_rate": 0.0,
+        "avg_pnl": -8.7
+      },
+      "目标止盈": {
+        "count": 1,
+        "win_rate": 100.0,
+        "avg_pnl": 22.05
+      }
+    }
+  },
+  "daily": {
+    "total_trades": 72,
+    "win_count": 20,
+    "loss_count": 52,
+    "win_rate": 27.8,
+    "avg_profit": -2.82,
+    "avg_win": 16.2,
+    "avg_loss": -10.14,
+    "pl_ratio": 1.6,
+    "avg_holding_days": 17.1,
+    "total_return": -203.32,
+    "avg_giveback": 97.3,
+    "max_single_profit": 35.89,
+    "max_single_loss": -25.19,
+    "reasons": {
+      "止盈": {
+        "count": 9,
+        "win_rate": 100.0,
+        "avg_pnl": 32.47
+      },
+      "止损": {
+        "count": 48,
+        "win_rate": 0.0,
+        "avg_pnl": -10.89
+      },
+      "回测结束平仓": {
+        "count": 15,
+        "win_rate": 73.3,
+        "avg_pnl": 1.82
+      }
+    }
+  },
+  "comparison": {
+    "win_rate_diff": 23.3,
+    "profit_diff": 3.15,
+    "holding_reduction": 10.1,
+    "giveback_improvement": 43.1,
+    "pl_ratio_diff": -0.56
+  },
+  "stocks_tested": 29,
+  "stocks_with_intraday": 29,
+  "stocks_with_daily": 29
+}

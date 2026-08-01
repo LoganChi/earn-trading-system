@@ -165,8 +165,8 @@ def analyze_intraday_vs_daily(intraday_trades, daily_trades, per_stock):
     intraday_avg_hold = np.mean([t.holding_days for t in intraday_completed]) if intraday_completed else 0
     intraday_total_return = sum(t.pnl_pct for t in intraday_completed)
 
-    # 分时利润回吐
-    givebacks = [t.profit_giveback for t in intraday_completed if t.profit_giveback > 0]
+    # 分时利润回吐（截断到100%，避免亏损交易拉爆均值）
+    givebacks = [min(t.profit_giveback, 100) for t in intraday_completed if t.profit_giveback > 0]
     intraday_avg_giveback = np.mean(givebacks) if givebacks else 0
 
     # 分时出场原因分布
@@ -193,11 +193,11 @@ def analyze_intraday_vs_daily(intraday_trades, daily_trades, per_stock):
     daily_avg_hold = np.mean([t.holding_days for t in daily_completed]) if daily_completed else 0
     daily_total_return = sum(t.pnl_pct for t in daily_completed)
 
-    # 日K利润回吐：用 max_profit_pct 和 pnl_pct 估算
+    # 日K利润回吐：用 max_profit_pct 和 pnl_pct 估算（截断到100%）
     daily_givebacks = []
     for t in daily_completed:
         if t.max_profit_pct > 0 and t.pnl_pct < t.max_profit_pct:
-            gb = (t.max_profit_pct - t.pnl_pct) / t.max_profit_pct * 100
+            gb = min((t.max_profit_pct - t.pnl_pct) / t.max_profit_pct * 100, 100)
             daily_givebacks.append(gb)
     daily_avg_giveback = np.mean(daily_givebacks) if daily_givebacks else 0
 

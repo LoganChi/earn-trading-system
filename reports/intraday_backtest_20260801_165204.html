@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分时级别回测报告</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d29;--text:#e4e7ef;--muted:#8892a6;--accent:#4fc3f7;--green:#26a69a;--red:#ef5350;--yellow:#ffc107;--purple:#ab47bc;--orange:#ff9800;--border:#2a2e3e}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;padding:20px;max-width:960px;margin:0 auto;line-height:1.7}
+h1{text-align:center;font-size:1.5rem;margin-bottom:4px;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.subtitle{text-align:center;color:var(--muted);font-size:0.85rem;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.card h2{font-size:1.1rem;color:var(--accent);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.stat{background:rgba(79,195,247,0.08);border-radius:8px;padding:12px;text-align:center}
+.stat .val{font-size:1.3rem;font-weight:700}
+.stat .lbl{font-size:0.75rem;color:var(--muted);margin-top:2px}
+.green{color:var(--green)} .red{color:var(--red)} .yellow{color:var(--yellow)} .orange{color:var(--orange)}
+table{width:100%;border-collapse:collapse;font-size:0.9rem;margin:8px 0}
+th{text-align:left;padding:8px;color:var(--accent);border-bottom:2px solid var(--border)}
+td{padding:8px;border-bottom:1px solid var(--border)}
+.col-intra{color:var(--accent)} .col-daily{color:var(--orange)}
+.highlight{background:rgba(79,195,247,0.05);border-left:3px solid var(--accent);padding:8px 12px;margin:6px 0;border-radius:0 6px 6px 0}
+.improve{background:rgba(38,166,154,0.08);border-left:3px solid var(--green);padding:8px 12px;margin:6px 0;border-radius:0 6px 6px 0}
+.disclaimer{text-align:center;color:var(--muted);font-size:0.8rem;margin-top:20px;padding:12px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+<h1>🕐 分时级别回测报告</h1>
+<div class="subtitle">分时MACD精准出场 vs 日K回测对比 · <span id="date"></span></div>
+<div id="app"></div>
+<div class="disclaimer">⚠️ 以上为量化回测结果，不构成投资建议。回测收益不代表未来表现。</div>
+<script>
+const D = {
+  "intraday": {
+    "total_trades": 45,
+    "win_count": 28,
+    "loss_count": 17,
+    "win_rate": 62.2,
+    "avg_profit": 2.4,
+    "avg_win": 8.81,
+    "avg_loss": -8.17,
+    "pl_ratio": 1.08,
+    "avg_holding_days": 9.2,
+    "total_return": 107.86,
+    "avg_giveback": 435.3,
+    "max_single_profit": 17.18,
+    "max_single_loss": -11.27,
+    "reasons": {
+      "超时平仓": {
+        "count": 3,
+        "win_rate": 66.7,
+        "avg_pnl": 1.27
+      },
+      "止损": {
+        "count": 16,
+        "win_rate": 0.0,
+        "avg_pnl": -8.4
+      },
+      "分时红柱拐头": {
+        "count": 26,
+        "win_rate": 100.0,
+        "avg_pnl": 9.17
+      }
+    }
+  },
+  "daily": {
+    "total_trades": 15,
+    "win_count": 6,
+    "loss_count": 9,
+    "win_rate": 40.0,
+    "avg_profit": -1.07,
+    "avg_win": 11.72,
+    "avg_loss": -9.59,
+    "pl_ratio": 1.22,
+    "avg_holding_days": 14.9,
+    "total_return": -15.99,
+    "avg_giveback": 407.8,
+    "max_single_profit": 30.67,
+    "max_single_loss": -12.78,
+    "reasons": {
+      "回测结束平仓": {
+        "count": 5,
+        "win_rate": 100.0,
+        "avg_pnl": 7.93
+      },
+      "止损": {
+        "count": 9,
+        "win_rate": 0.0,
+        "avg_pnl": -9.59
+      },
+      "止盈": {
+        "count": 1,
+        "win_rate": 100.0,
+        "avg_pnl": 30.67
+      }
+    }
+  },
+  "comparison": {
+    "win_rate_diff": 22.2,
+    "profit_diff": 3.46,
+    "holding_reduction": 5.7,
+    "giveback_improvement": -27.5,
+    "pl_ratio_diff": -0.14
+  },
+  "stocks_tested": 20,
+  "stocks_with_intraday": 10,
+  "stocks_with_daily": 10
+};
+const app = document.getElementById('app');
+document.getElementById('date').textContent = new Date().toLocaleDateString('zh-CN');
+
+function colorVal(v, suffix='%') {
+  const cls = v > 0 ? 'green' : v < 0 ? 'red' : '';
+  return `<span class="${cls}">${v > 0 ? '+' : ''}${v.toFixed(1)}${suffix}</span>`;
+}
+
+let html = '';
+
+// === 对比表 ===
+html += `<div class="card"><h2>📊 分时 vs 日K 回测对比</h2>`;
+html += `<table>`;
+html += `<tr><th>指标</th><th class="col-intra">🕐 分时</th><th class="col-daily">📈 日K</th><th>差异</th></tr>`;
+
+const rows = [
+  ['总交易数', D.intraday.total_trades, D.daily.total_trades, D.intraday.total_trades - D.daily.total_trades, ''],
+  ['胜率', D.intraday.win_rate + '%', D.daily.win_rate + '%', D.comparison.win_rate_diff.toFixed(1) + 'pp', ''],
+  ['平均收益', D.intraday.avg_profit, D.daily.avg_profit, D.comparison.profit_diff, '%'],
+  ['平均盈利', D.intraday.avg_win, D.daily.avg_win, D.intraday.avg_win - D.daily.avg_win, '%'],
+  ['平均亏损', D.intraday.avg_loss, D.daily.avg_loss, D.intraday.avg_loss - D.daily.avg_loss, '%'],
+  ['盈亏比', D.intraday.pl_ratio, D.daily.pl_ratio, D.comparison.pl_ratio_diff, ''],
+  ['平均持有', D.intraday.avg_holding_days + '天', D.daily.avg_holding_days + '天', D.comparison.holding_reduction.toFixed(1) + '天', ''],
+  ['利润回吐', D.intraday.avg_giveback + '%', D.daily.avg_giveback + '%', D.comparison.giveback_improvement.toFixed(1) + '%', ''],
+  ['累计收益', D.intraday.total_return, D.daily.total_return, D.intraday.total_return - D.daily.total_return, '%'],
+];
+
+for (const [label, intra, daily, diff, suffix] of rows) {
+  let diffStr = diff;
+  let diffCls = '';
+  if (typeof diff === 'number') {
+    diffStr = (diff > 0 ? '+' : '') + diff.toFixed(suffix === '%' ? 2 : 1) + (suffix || '');
+    if (label === '平均持有' || label === '利润回吐') {
+      diffCls = diff < 0 ? 'green' : 'red';  // 持有天数/回吐减少是好事
+    } else if (label === '胜率' || label === '平均收益' || label === '盈亏比' || label === '累计收益') {
+      diffCls = diff > 0 ? 'green' : 'red';
+    } else {
+      diffCls = diff > 0 ? 'green' : diff < 0 ? 'red' : '';
+    }
+  }
+  let intraStr = typeof intra === 'number' ? (suffix === '%' ? (intra > 0 ? '+' : '') + intra.toFixed(1) + '%' : intra.toFixed(2)) : intra;
+  let dailyStr = typeof daily === 'number' ? (suffix === '%' ? (daily > 0 ? '+' : '') + daily.toFixed(1) + '%' : daily.toFixed(2)) : daily;
+  html += `<tr><td>${label}</td><td class="col-intra">${intraStr}</td><td class="col-daily">${dailyStr}</td><td class="${diffCls}">${diffStr}</td></tr>`;
+}
+html += `</table>`;
+html += `</div>`;
+
+// === 关键改善 ===
+html += `<div class="card"><h2>🎯 分时出场精度提升</h2>`;
+html += `<div class="improve"><b>利润回吐</b>：${D.daily.avg_giveback.toFixed(0)}% → ${D.intraday.avg_giveback.toFixed(0)}%（改善${D.comparison.giveback_improvement.toFixed(0)}%）</div>`;
+html += `<div class="improve"><b>平均持有</b>：${D.daily.avg_holding_days.toFixed(0)}天 → ${D.intraday.avg_holding_days.toFixed(0)}天（缩短${D.comparison.holding_reduction.toFixed(0)}天）</div>`;
+html += `<div class="improve"><b>胜率</b>：${D.daily.win_rate.toFixed(0)}% → ${D.intraday.win_rate.toFixed(0)}%（${D.comparison.win_rate_diff > 0 ? '↑' : '↓'}${Math.abs(D.comparison.win_rate_diff).toFixed(0)}pp）</div>`;
+html += `</div>`;
+
+// === 分时统计卡片 ===
+html += `<div class="card"><h2>🕐 分时回测详情</h2>`;
+html += `<div class="stat-grid">`;
+html += `<div class="stat"><div class="val ${D.intraday.win_rate > 50 ? 'green' : 'red'}">${D.intraday.win_rate}%</div><div class="lbl">分时胜率</div></div>`;
+html += `<div class="stat"><div class="val ${D.intraday.avg_profit > 0 ? 'green' : 'red'}">${D.intraday.avg_profit > 0 ? '+' : ''}${D.intraday.avg_profit}%</div><div class="lbl">分时均收益</div></div>`;
+html += `<div class="stat"><div class="val green">${D.intraday.avg_win}%</div><div class="lbl">分时均盈</div></div>`;
+html += `<div class="stat"><div class="val red">${D.intraday.avg_loss}%</div><div class="lbl">分时均亏</div></div>`;
+html += `<div class="stat"><div class="val">${D.intraday.total_trades}</div><div class="lbl">交易数</div></div>`;
+html += `<div class="stat"><div class="val">${D.intraday.avg_holding_days}天</div><div class="lbl">平均持有</div></div>`;
+html += `</div></div>`;
+
+// === 日K统计卡片 ===
+html += `<div class="card"><h2>📈 日K回测详情</h2>`;
+html += `<div class="stat-grid">`;
+html += `<div class="stat"><div class="val ${D.daily.win_rate > 50 ? 'green' : 'red'}">${D.daily.win_rate}%</div><div class="lbl">日K胜率</div></div>`;
+html += `<div class="stat"><div class="val ${D.daily.avg_profit > 0 ? 'green' : 'red'}">${D.daily.avg_profit > 0 ? '+' : ''}${D.daily.avg_profit}%</div><div class="lbl">日K均收益</div></div>`;
+html += `<div class="stat"><div class="val green">${D.daily.avg_win}%</div><div class="lbl">日K均盈</div></div>`;
+html += `<div class="stat"><div class="val red">${D.daily.avg_loss}%</div><div class="lbl">日K均亏</div></div>`;
+html += `<div class="stat"><div class="val">${D.daily.total_trades}</div><div class="lbl">交易数</div></div>`;
+html += `<div class="stat"><div class="val">${D.daily.avg_holding_days}天</div><div class="lbl">平均持有</div></div>`;
+html += `</div></div>`;
+
+// === 分时出场原因 ===
+html += `<div class="card"><h2>🚪 分时出场原因分布</h2>`;
+html += `<table><tr><th>原因</th><th>次数</th><th>占比</th><th>胜率</th><th>平均收益</th></tr>`;
+for (const [reason, s] of Object.entries(D.intraday.reasons)) {
+  const pct = D.intraday.total_trades > 0 ? (s.count / D.intraday.total_trades * 100).toFixed(0) : 0;
+  html += `<tr><td>${reason}</td><td>${s.count}</td><td>${pct}%</td><td>${s.win_rate}%</td><td>${colorVal(s.avg_pnl)}</td></tr>`;
+}
+html += `</table></div>`;
+
+// === 日K出场原因 ===
+html += `<div class="card"><h2>🚪 日K出场原因分布</h2>`;
+html += `<table><tr><th>原因</th><th>次数</th><th>占比</th><th>胜率</th><th>平均收益</th></tr>`;
+for (const [reason, s] of Object.entries(D.daily.reasons)) {
+  const pct = D.daily.total_trades > 0 ? (s.count / D.daily.total_trades * 100).toFixed(0) : 0;
+  html += `<tr><td>${reason}</td><td>${s.count}</td><td>${pct}%</td><td>${s.win_rate}%</td><td>${colorVal(s.avg_pnl)}</td></tr>`;
+}
+html += `</table></div>`;
+
+// === 覆盖范围 ===
+html += `<div class="card"><h2>📋 覆盖范围</h2>`;
+html += `<p>测试股票数: ${D.stocks_tested} | 有分时信号: ${D.stocks_with_intraday} | 有日K信号: ${D.stocks_with_daily}</p>`;
+html += `</div>`;
+
+app.innerHTML = html;
+</script>
+</body>
+</html>

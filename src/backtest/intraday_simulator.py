@@ -135,10 +135,18 @@ def run_intraday_backtest(
     take_profit_pct: float = 20.0,
     take_profit_full: float = 30.0,
     # 分时出场参数
-    intraday_red_shrink_bars: int = 3,    # 分时MACD红柱连续缩短N根=拐头
-    intraday_min_profit_for_exit: float = 8.0,  # 盘中浮盈>8%才开始看分时出场
-    intraday_pullback_from_peak: float = 5.0,   # 从盘中高点回落>5%=减仓
+    intraday_red_shrink_bars: int = 2,    # P1优化: 3→2 更灵敏
+    intraday_min_profit_for_exit: float = 5.0,  # P1优化: 8→5 更早锁利润
+    intraday_pullback_from_peak: float = 3.0,   # P1优化: 5→3 更快锁利润
     max_holding_days: int = 20,          # 最多持有天数
+    # P0改进：风控过滤器
+    market_consecutive_down_limit: int = 3,  # 大盘连跌N天=强制空仓
+    market_df: pd.DataFrame = None,          # 大盘日K(trade_date, pct_chg)
+    cooldown_days: int = 30,                 # 连续止损后冷却天数
+    consecutive_stop_limit: int = 2,         # 连续N次止损触发冷却
+    # P1改进：入场确认
+    require_next_day_confirm: bool = True,   # 次日开盘站稳才入场
+    next_day_confirm_pct: float = -2.0,      # 次日跌幅不超过2%=站稳
 ) -> List[IntradayTrade]:
     """
     分时级别战法回测
@@ -156,6 +164,24 @@ def run_intraday_backtest(
     if minute_df.empty:
         return []
     
+    # P0: 大盘连跌查找表
+    mkt_down_map = {}  # date -> consecutive_down_days
+    if market_df is not None:
+        mkt_sorted = market_df.sort_values('trade_date').reset_index(drop=True)
+        consec = 0
+        for _, row in mkt_sorted.iterrows():
+            d = str(row['trade_date'])
+            chg = row.get('pct_chg', 0)
+            try:
+                chg = float(chg)
+            except:
+                chg = 0
+            if chg < 0:
+                consec += 1
+            else:
+                consec = 0
+            mkt_down_map[d] = consec
+    
     # 按交易日分组分钟数据
     minute_df['trade_date'] = minute_df['trade_time'].str[:10].str.replace('-', '')
     minute_by_date = {date: group.sort_values('trade_time').reset_index(drop=True) 
@@ -164,6 +190,12 @@ def run_intraday_backtest(
     trades = []
     last_entry_date = ""
     
+    # P0: 连续止损冷却追踪
+    consecutive_stops = 0
+    cooldown_until = ""  # 冷却期截止日期
+    
+    all_dates = sorted(daily_df['trade_date'].astype(str).tolist())
+    
     for sig in entry_signals:
         entry_date = sig.date
         
@@ -171,18 +203,57 @@ def run_intraday_backtest(
         if last_entry_date and entry_date <= last_entry_date:
             continue
         
-        entry_price = sig.price
+        # P0: 大盘连跌过滤
+        if market_df is not None:
+            mkt_down = mkt_down_map.get(entry_date, 0)
+            if mkt_down >= market_consecutive_down_limit:
+                continue  # 大盘连跌≥3天，跳过
+        
+        # P0: 冷却期检查
+        if cooldown_until and entry_date < cooldown_until:
+            continue
+        
+        # P1: 入场确认——次日不跌破-2%才真正入场
+        if require_next_day_confirm:
+            try:
+                sig_idx = all_dates.index(entry_date)
+                if sig_idx + 1 < len(all_dates):
+                    next_date = all_dates[sig_idx + 1]
+                    next_row = daily_df[daily_df['trade_date'].astype(str) == next_date]
+                    if len(next_row) > 0:
+                        next_open = next_row.iloc[0].get('open', 0)
+                        next_close = next_row.iloc[0]['close']
+                        # 次日收盘相对信号日收盘的涨跌
+                        next_chg = (next_close / sig.price - 1) * 100
+                        if next_chg < next_day_confirm_pct:
+                            continue  # 次日跌破-2%，信号取消
+                        # 用次日开盘价作为实际入场价（更真实）
+                        if next_open > 0:
+                            entry_price_actual = next_open
+                        else:
+                            entry_price_actual = next_close
+                        actual_entry_date = next_date
+                    else:
+                        continue
+                else:
+                    continue
+            except (ValueError, KeyError):
+                continue
+        else:
+            entry_price_actual = sig.price
+            actual_entry_date = entry_date
+        
+        entry_price = entry_price_actual
         
         # 找入场后的分钟数据
-        all_dates = sorted(daily_df['trade_date'].astype(str).tolist())
         try:
-            entry_idx = all_dates.index(entry_date)
+            entry_idx = all_dates.index(actual_entry_date)
         except ValueError:
             continue
         
         trade = IntradayTrade(
             code=code, name=name,
-            entry_date=entry_date, entry_price=entry_price,
+            entry_date=actual_entry_date, entry_price=entry_price,
             signal_strength=sig.signal_strength,
         )
         
@@ -341,7 +412,25 @@ def run_intraday_backtest(
             trade.exit_reason = "超时平仓"
             trade.pnl_pct = (last_price / entry_price - 1) * 100
         
-        last_entry_date = trade.exit_time[:8] if trade.exit_time else entry_date
+        last_entry_date = trade.exit_time[:8] if trade.exit_time else actual_entry_date
+        
+        # P0: 连续止损冷却
+        if "止损" in trade.exit_reason:
+            consecutive_stops += 1
+            if consecutive_stops >= consecutive_stop_limit:
+                # 触发冷却
+                try:
+                    exit_date_idx = all_dates.index(last_entry_date)
+                    if exit_date_idx + cooldown_days < len(all_dates):
+                        cooldown_until = all_dates[exit_date_idx + cooldown_days]
+                    else:
+                        cooldown_until = all_dates[-1]
+                except ValueError:
+                    pass
+                consecutive_stops = 0  # 重置计数器
+        else:
+            consecutive_stops = 0  # 非止损出场，重置
+        
         trades.append(trade)
     
     return trades

@@ -147,6 +147,8 @@ def run_intraday_backtest(
     # P1改进：入场确认
     require_next_day_confirm: bool = True,   # 次日开盘站稳才入场
     next_day_confirm_pct: float = -2.0,      # 次日跌幅不超过2%=站稳
+    # P2改进：自适应regime参数
+    regime_params: dict = None,              # 从regime_params.py获取的自适应参数
 ) -> List[IntradayTrade]:
     """
     分时级别战法回测
@@ -211,6 +213,37 @@ def run_intraday_backtest(
         
         # P0: 冷却期检查
         if cooldown_until and entry_date < cooldown_until:
+            continue
+        
+        # P2: 自适应regime参数 —— 根据当前市场状态调整止损/止盈
+        current_stop = stop_loss_pct
+        current_take_profit = take_profit_pct
+        current_intraday_threshold = intraday_min_profit_for_exit
+        skip_entry = False
+        
+        if regime_params and market_df is not None:
+            from src.risk.regime_params import classify_market_trend, classify_market_vol, classify_sector_strength, get_regime_optimal_params
+            mkt_trend = classify_market_trend(market_df, entry_date)
+            mkt_vol = classify_market_vol(market_df, entry_date)
+            try:
+                stock_row = daily_df[daily_df['trade_date'].astype(str) == entry_date]
+                stock_pct = float(stock_row.iloc[0].get('pct_chg', 0)) if len(stock_row) > 0 else 0
+                mkt_row = market_df[market_df['trade_date'].astype(str) == entry_date]
+                mkt_pct = float(mkt_row.iloc[0].get('pct_chg', 0)) if len(mkt_row) > 0 else 0
+            except:
+                stock_pct, mkt_pct = 0, 0
+            sector_str = classify_sector_strength(stock_pct, mkt_pct)
+            
+            rp = get_regime_optimal_params(regime_params, mkt_trend, mkt_vol, sector_str)
+            current_stop = rp['stop_loss']
+            current_take_profit = rp['take_profit']
+            current_intraday_threshold = rp.get('intraday_threshold', intraday_min_profit_for_exit)
+            
+            # P2: 胜率极低的状态直接跳过
+            if rp.get('expected_win_rate', 50) < 15 and rp.get('sample_count', 0) >= 3:
+                skip_entry = True
+        
+        if skip_entry:
             continue
         
         # P1: 入场确认——次日不跌破-2%才真正入场
@@ -280,7 +313,7 @@ def run_intraday_backtest(
                 trade.intraday_max_price = max(trade.intraday_max_price, daily_close)
                 trade.intraday_max_profit = max(trade.intraday_max_profit, profit)
                 
-                if profit <= stop_loss_pct:
+                if profit <= current_stop:
                     trade.exit_time = f"{current_date} 15:00"
                     trade.exit_price = daily_close
                     trade.exit_reason = "止损"
@@ -292,7 +325,7 @@ def run_intraday_backtest(
                     trade.exit_reason = "强制止盈"
                     trade.pnl_pct = profit
                     position_open = False
-                elif profit >= take_profit_pct and daily_count > 2:
+                elif profit >= current_take_profit and daily_count > 2:
                     trade.exit_time = f"{current_date} 15:00"
                     trade.exit_price = daily_close
                     trade.exit_reason = "目标止盈"
@@ -337,7 +370,7 @@ def run_intraday_backtest(
                 # === 分时出场条件检查 ===
                 
                 # 止损
-                if profit <= stop_loss_pct:
+                if profit <= current_stop:
                     trade.exit_time = time_str
                     trade.exit_price = price
                     trade.exit_reason = "止损"
@@ -357,7 +390,7 @@ def run_intraday_backtest(
                     break
                 
                 # 分时MACD红柱拐头（你的真实操作逻辑）
-                if profit >= intraday_min_profit_for_exit and m_idx >= intraday_red_shrink_bars:
+                if profit >= current_intraday_threshold and m_idx >= intraday_red_shrink_bars:
                     # 检查红柱是否连续缩短
                     recent_bars = i_macd[max(0, m_idx - intraday_red_shrink_bars):m_idx + 1]
                     if len(recent_bars) >= intraday_red_shrink_bars + 1:
@@ -379,7 +412,7 @@ def run_intraday_backtest(
                             break
                 
                 # 从盘中高点回落
-                if profit >= intraday_min_profit_for_exit and trade.intraday_max_profit > profit:
+                if profit >= current_intraday_threshold and trade.intraday_max_profit > profit:
                     pullback = trade.intraday_max_profit - profit
                     if pullback >= intraday_pullback_from_peak:
                         trade.exit_time = time_str

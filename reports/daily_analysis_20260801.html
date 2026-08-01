@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📊 每日盘前分析 2026-08-01</title>
+<style>
+:root {{
+  --bg: #0f1117;
+  --card-bg: #1a1d29;
+  --card-hover: #22263a;
+  --text: #e4e7ef;
+  --text-muted: #8892a6;
+  --accent: #4fc3f7;
+  --green: #26a69a;
+  --red: #ef5350;
+  --yellow: #ffc107;
+  --purple: #ab47bc;
+  --border: #2a2e3e;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  padding: 20px;
+  max-width: 1000px;
+  margin: 0 auto;
+}}
+h1 {{
+  text-align: center;
+  font-size: 1.6rem;
+  margin-bottom: 5px;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}}
+.subtitle {{ text-align: center; color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px; }}
+
+.summary-bar {{
+  display: flex;
+  gap: 15px;
+  margin-bottom: 25px;
+  flex-wrap: wrap;
+}}
+.summary-card {{
+  flex: 1;
+  min-width: 180px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  text-align: center;
+}}
+.summary-card .label {{ color: var(--text-muted); font-size: 0.8rem; margin-bottom: 5px; }}
+.summary-card .value {{ font-size: 1.5rem; font-weight: 700; }}
+
+.stock-card {{
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  margin-bottom: 18px;
+  transition: border-color 0.2s;
+}}
+.stock-card:hover {{ border-color: var(--accent); }}
+.stock-header {{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 15px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}}
+.stock-name {{ font-size: 1.3rem; font-weight: 700; }}
+.stock-code {{ color: var(--text-muted); font-size: 0.9rem; margin-left: 8px; }}
+.stock-price {{ font-size: 1.1rem; }}
+.stock-price .pct {{ margin-left: 8px; font-size: 0.9rem; }}
+
+.signal-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 15px;
+}}
+.signal-box {{
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  padding: 12px;
+}}
+.signal-box .title {{
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}}
+.signal-box .content {{ font-size: 0.95rem; }}
+
+.factor-row {{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 0.9rem;
+}}
+.factor-badge {{
+  display: inline-block;
+  width: 40px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 2px 0;
+}}
+.badge-long {{ background: rgba(38,166,154,0.2); color: var(--green); border: 1px solid var(--green); }}
+.badge-short {{ background: rgba(239,83,80,0.2); color: var(--red); border: 1px solid var(--red); }}
+.badge-neutral {{ background: rgba(136,146,166,0.2); color: var(--text-muted); border: 1px solid var(--text-muted); }}
+
+.action-box {{
+  display: flex;
+  gap: 15px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}}
+.action-tag {{
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+}}
+.tag-hold {{ background: rgba(38,166,154,0.15); color: var(--green); border: 1px solid var(--green); }}
+.tag-reduce {{ background: rgba(239,83,80,0.15); color: var(--red); border: 1px solid var(--red); }}
+.tag-watch {{ background: rgba(255,193,7,0.15); color: var(--yellow); border: 1px solid var(--yellow); }}
+.tag-add {{ background: rgba(79,195,247,0.15); color: var(--accent); border: 1px solid var(--accent); }}
+
+.stop-loss {{ color: var(--red); font-weight: 600; }}
+
+.stage-badge {{
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}}
+.stage-demon {{ background: rgba(239,83,80,0.2); color: var(--red); }}
+.stage-neutral {{ background: rgba(136,146,166,0.2); color: var(--text-muted); }}
+.stage-matched {{ background: rgba(38,166,154,0.2); color: var(--green); }}
+
+.strength-bar {{
+  display: inline-block;
+  width: 50px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  margin-left: 5px;
+  vertical-align: middle;
+  overflow: hidden;
+}}
+.strength-fill {{
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}}
+
+.disclaimer {{
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 30px;
+  padding: 15px;
+  border-top: 1px solid var(--border);
+}}
+
+@media (max-width: 600px) {{
+  .stock-header {{ flex-direction: column; align-items: flex-start; gap: 8px; }}
+  .signal-grid {{ grid-template-columns: 1fr; }}
+}}
+</style>
+</head>
+<body>
+
+<h1>📊 每日盘前分析</h1>
+<p class="subtitle">2026-08-01 | earn-trading-system</p>
+
+<div id="app"></div>
+
+<p class="disclaimer">⚠️ 以上为量化信号参考，不构成投资建议。请结合基本面和自身判断操作。<br>
+Generated by daily_analysis.py</p>
+
+<script>
+const REPORT_DATA = {"date": "2026-08-01", "sentiment": {"promotion_1to2": 7.3, "promotion_2to3": 35.2, "limit_up_count": 223, "avg_next_day_return": 0.0, "thermometer": "偏冷", "description": "涨停223只，1→2晋级率7.3%，2→3晋级率35.2%，涨停股次日均收0.0%"}, "total_position": 0.06, "results": [{"code": "601727", "name": "上海电气", "errors": [], "trade_date": "20260724", "close": 6.52, "pct_chg": -3.69, "macd": {"signal_type": "neutral", "signal_strength": 0.0, "green_area": 3.73, "green_severity": "shallow", "description": "无描述", "dif": -0.2285, "dea": -0.2662, "macd_bar": 0.0755}, "vp": {"signal_type": "edge_test", "signal_strength": 0.3, "poc_price": 6.79, "value_area_high": 7.1, "value_area_low": 6.6, "at_edge": true, "edge_breakout": false, "description": "VP边缘无量(0.9x均值) 下沿 大概率回归POC=6.79"}, "five_factor": {"long_votes": 1, "short_votes": 1, "neutral_votes": 3, "position_advice": "空仓/轻仓", "position_ratio": 0.15, "factors": [{"name": "估值", "direction": "多", "strength": 0.97, "detail": "PE=87.8 极低估值"}, {"name": "资金", "direction": "中性", "strength": 0.2, "detail": "量能平稳"}, {"name": "技术", "direction": "中性", "strength": 0.3, "detail": "MACD中性，红柱运行 bar=0.076"}, {"name": "情绪", "direction": "中性", "strength": 0.2, "detail": "情绪一般"}, {"name": "基本面", "direction": "空", "strength": 0.3, "detail": "跑输大盘"}]}, "stage": {"stage": "恶魔股阶段", "win_rate": 0.0, "total_signals": 5, "winning_signals": 0, "position_adjustment": 0.5, "description": "恶魔股阶段：近期胜率仅0.0%，策略与当前走势不匹配，建议降仓至50%"}, "stop_loss": 6.25, "low_20": 6.33, "atr": 0.178, "action": "关注"}, {"code": "600839", "name": "四川长虹", "errors": [], "trade_date": "20260724", "close": 6.6, "pct_chg": -4.9, "macd": {"signal_type": "exit_warning", "signal_strength": 0.5, "green_area": 3.48, "green_severity": "moderate", "description": "红柱连续缩短（动能衰竭），考虑减仓", "dif": -0.0655, "dea": -0.0698, "macd_bar": 0.0087}, "vp": {"signal_type": "edge_test", "signal_strength": 0.3, "poc_price": 7.18, "value_area_high": 7.43, "value_area_low": 6.89, "at_edge": true, "edge_breakout": false, "description": "VP边缘无量(0.7x均值) 下沿 大概率回归POC=7.18"}, "five_factor": {"long_votes": 0, "short_votes": 3, "neutral_votes": 2, "position_advice": "空仓/轻仓", "position_ratio": 0.05, "factors": [{"name": "估值", "direction": "中性", "strength": 0.2, "detail": "PE=42.2 估值合理"}, {"name": "资金", "direction": "空", "strength": 0.35, "detail": "缩量"}, {"name": "技术", "direction": "空", "strength": 0.5, "detail": "红柱连续缩短（动能衰竭），考虑减仓"}, {"name": "情绪", "direction": "中性", "strength": 0.2, "detail": "情绪一般"}, {"name": "基本面", "direction": "空", "strength": 0.42, "detail": "跑输大盘"}]}, "stage": {"stage": "中性阶段", "win_rate": 0.0, "total_signals": 0, "winning_signals": 0, "position_adjustment": 1.0, "description": "近20天无入场信号，默认中性阶段"}, "stop_loss": 6.06, "low_20": 6.22, "atr": 0.362, "action": "减仓"}, {"code": "601127", "name": "赛力斯", "errors": [], "trade_date": "20260724", "close": 54.33, "pct_chg": -3.64, "macd": {"signal_type": "neutral", "signal_strength": 0.0, "green_area": 24.01, "green_severity": "deep", "description": "无描述", "dif": -3.553, "dea": -4.0926, "macd_bar": 1.0793}, "vp": {"signal_type": "edge_test", "signal_strength": 0.3, "poc_price": 55.32, "value_area_high": 60.76, "value_area_low": 54.98, "at_edge": true, "edge_breakout": false, "description": "VP边缘无量(0.6x均值) 下沿 大概率回归POC=55.32"}, "five_factor": {"long_votes": 1, "short_votes": 1, "neutral_votes": 3, "position_advice": "空仓/轻仓", "position_ratio": 0.15, "factors": [{"name": "估值", "direction": "多", "strength": 1.0, "detail": "PE=18.9 极低估值"}, {"name": "资金", "direction": "空", "strength": 0.36, "detail": "缩量"}, {"name": "技术", "direction": "中性", "strength": 0.3, "detail": "MACD中性，红柱运行 bar=1.079"}, {"name": "情绪", "direction": "中性", "strength": 0.2, "detail": "情绪一般"}, {"name": "基本面", "direction": "中性", "strength": 0.2, "detail": "同步大盘"}]}, "stage": {"stage": "恶魔股阶段", "win_rate": 0.0, "total_signals": 4, "winning_signals": 0, "position_adjustment": 0.5, "description": "恶魔股阶段：近期胜率仅0.0%，策略与当前走势不匹配，建议降仓至50%"}, "stop_loss": 50.64, "low_20": 52.01, "atr": 2.462, "action": "关注"}, {"code": "600460", "name": "士兰微", "errors": [], "trade_date": "20260724", "close": 31.57, "pct_chg": -2.02, "macd": {"signal_type": "neutral", "signal_strength": 0.0, "green_area": 43.08, "green_severity": "deep", "description": "无描述", "dif": -2.6833, "dea": -0.9189, "macd_bar": -3.5288}, "vp": {"signal_type": "edge_test", "signal_strength": 0.3, "poc_price": 53.05, "value_area_high": 54.51, "value_area_low": 40.36, "at_edge": true, "edge_breakout": false, "description": "VP边缘无量(0.5x均值) 下沿 大概率回归POC=53.05"}, "five_factor": {"long_votes": 0, "short_votes": 2, "neutral_votes": 3, "position_advice": "空仓/轻仓", "position_ratio": 0.1, "factors": [{"name": "估值", "direction": "空", "strength": 0.99, "detail": "PE=151.7 极高估值"}, {"name": "资金", "direction": "空", "strength": 0.34, "detail": "缩量"}, {"name": "技术", "direction": "中性", "strength": 0.2, "detail": "MACD中性，绿柱运行 bar=-3.529"}, {"name": "情绪", "direction": "中性", "strength": 0.2, "detail": "情绪一般"}, {"name": "基本面", "direction": "中性", "strength": 0.2, "detail": "同步大盘"}]}, "stage": {"stage": "中性阶段", "win_rate": 0.0, "total_signals": 0, "winning_signals": 0, "position_adjustment": 1.0, "description": "近20天无入场信号，默认中性阶段"}, "stop_loss": 25.91, "low_20": 27.85, "atr": 3.772, "action": "关注"}]};
+
+function badgeClass(dir) {{
+  if (dir === '多') return 'badge-long';
+  if (dir === '空') return 'badge-short';
+  return 'badge-neutral';
+}}
+
+function actionTagClass(action) {{
+  if (action.includes('加仓')) return 'tag-add';
+  if (action.includes('减仓')) return 'tag-reduce';
+  if (action.includes('关注')) return 'tag-watch';
+  return 'tag-hold';
+}}
+
+function stageClass(stage) {{
+  if (stage.includes('恶魔')) return 'stage-demon';
+  if (stage.includes('匹配')) return 'stage-matched';
+  return 'stage-neutral';
+}}
+
+function strengthColor(s) {{
+  if (s > 0.6) return '#26a69a';
+  if (s > 0.3) return '#ffc107';
+  return '#ef5350';
+}}
+
+function pctColor(pct) {{
+  return pct >= 0 ? '#26a69a' : '#ef5350';
+}}
+
+function renderFactor(f) {{
+  const sc = strengthColor(f.strength);
+  return `<div class="factor-row">
+    <span class="factor-badge ${{badgeClass(f.direction)}}">${{f.direction}}</span>
+    <span style="width:50px;color:var(--text-muted)">${{f.name}}</span>
+    <span style="flex:1;font-size:0.85rem;color:var(--text-muted)">${{f.detail}}</span>
+    <span class="strength-bar"><span class="strength-fill" style="width:${{f.strength*100}}%;background:${{sc}}"></span></span>
+  </div>`;
+}}
+
+function renderStock(r) {{
+  const macd = r.macd || {{}};
+  const vp = r.vp || {{}};
+  const ff = r.five_factor || {{}};
+  const stage = r.stage || {{}};
+
+  let factorsHtml = (ff.factors || []).map(renderFactor).join('');
+
+  let actionHtml = '';
+  if (r.action) {{
+    actionHtml = `<div class="action-box">
+      <span class="action-tag ${{actionTagClass(r.action)}}">📋 ${{r.action}}</span>
+      <span class="action-tag tag-reduce">🛑 止损: <span class="stop-loss">${{r.stop_loss || '?'}}元</span></span>
+    </div>`;
+  }}
+
+  const stageStr = stage.stage || '未知';
+  const winRate = stage.win_rate != null ? `${{stage.win_rate}}%` : 'N/A';
+
+  return `<div class="stock-card">
+    <div class="stock-header">
+      <div>
+        <span class="stock-name">${{r.name}}</span>
+        <span class="stock-code">${{r.code}}</span>
+      </div>
+      <div class="stock-price">
+        ${{r.close || '?'}}元
+        <span class="pct" style="color:${{pctColor(r.pct_chg || 0)}}">${{(r.pct_chg || 0) > 0 ? '+' : ''}}${{(r.pct_chg || 0).toFixed(2)}}%</span>
+      </div>
+    </div>
+
+    <div class="signal-grid">
+      <div class="signal-box">
+        <div class="title">MACD 面积</div>
+        <div class="content">
+          绿峰面积: <strong>${{macd.green_area || 'N/A'}}</strong> (${{macd.green_severity || ''}})<br>
+          <span style="color:var(--text-muted);font-size:0.85rem">${{macd.description || ''}}</span>
+        </div>
+      </div>
+      <div class="signal-box">
+        <div class="title">成交量分布</div>
+        <div class="content">
+          POC: <strong>${{vp.poc_price || 'N/A'}}</strong><br>
+          价值区: ${{vp.value_area_low || '?'}} ~ ${{vp.value_area_high || '?'}}<br>
+          <span style="color:var(--text-muted);font-size:0.85rem">${{vp.description || ''}}</span>
+        </div>
+      </div>
+      <div class="signal-box">
+        <div class="title">阶段识别</div>
+        <div class="content">
+          <span class="stage-badge ${{stageClass(stageStr)}}">${{stageStr}}</span><br>
+          胜率: ${{winRate}} (${{stage.winning_signals || 0}}/${{stage.total_signals || 0}})
+        </div>
+      </div>
+    </div>
+
+    <div style="margin:10px 0;">
+      <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;">
+        五因子投票: ${{ff.long_votes || 0}}多 / ${{ff.short_votes || 0}}空 / ${{ff.neutral_votes || 0}}中性 → ${{ff.position_advice || 'N/A'}} (${{((ff.position_ratio || 0)*100).toFixed(0)}}%)
+      </div>
+      ${{factorsHtml}}
+    </div>
+
+    ${{actionHtml}}
+  </div>`;
+}}
+
+function render() {{
+  const app = document.getElementById('app');
+  let html = '';
+
+  // 摘要栏
+  const s = REPORT_DATA.sentiment || {{}};
+  html += `<div class="summary-bar">
+    <div class="summary-card">
+      <div class="label">🌡️ 市场温度</div>
+      <div class="value" style="color:var(--yellow)">${{s.thermometer || 'N/A'}}</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">连板晋级率</div>
+      <div class="value" style="color:var(--accent)">${{s.promotion_1to2 || 0}}%</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">涨停股数</div>
+      <div class="value">${{s.limit_up_count || 0}}</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">建议总仓位</div>
+      <div class="value" style="color:var(--green)">${{((REPORT_DATA.total_position || 0)*100).toFixed(0)}}%</div>
+    </div>
+  </div>`;
+
+  // 股票卡片
+  for (const r of REPORT_DATA.results) {{
+    html += renderStock(r);
+  }}
+
+  app.innerHTML = html;
+}}
+
+render();
+</script>
+</body>
+</html>

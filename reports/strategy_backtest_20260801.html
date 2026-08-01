@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>战法回测验证报告</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d29;--text:#e4e7ef;--muted:#8892a6;--accent:#4fc3f7;--green:#26a69a;--red:#ef5350;--yellow:#ffc107;--purple:#ab47bc;--border:#2a2e3e}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;padding:20px;max-width:900px;margin:0 auto;line-height:1.7}
+h1{text-align:center;font-size:1.5rem;margin-bottom:4px;background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.subtitle{text-align:center;color:var(--muted);font-size:0.85rem;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.card h2{font-size:1.1rem;color:var(--accent);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.stat{background:rgba(79,195,247,0.08);border-radius:8px;padding:12px;text-align:center}
+.stat .val{font-size:1.4rem;font-weight:700}
+.stat .lbl{font-size:0.75rem;color:var(--muted);margin-top:2px}
+.green{color:var(--green)} .red{color:var(--red)} .yellow{color:var(--yellow)}
+table{width:100%;border-collapse:collapse;font-size:0.9rem;margin:8px 0}
+th{text-align:left;padding:8px;color:var(--accent);border-bottom:2px solid var(--border)}
+td{padding:8px;border-bottom:1px solid var(--border)}
+.bar{display:inline-block;height:20px;border-radius:4px;vertical-align:middle}
+.bar-bg{display:inline-block;width:100px;height:20px;background:var(--border);border-radius:4px;overflow:hidden;vertical-align:middle}
+.bar-fill{height:20px;border-radius:4px}
+.positive{background:var(--green)} .negative{background:var(--red)}
+.scene{background:rgba(239,83,80,0.1);border-left:3px solid var(--red);padding:8px 12px;margin:6px 0;border-radius:0 6px 6px 0;font-size:0.9rem}
+.disclaimer{text-align:center;color:var(--muted);font-size:0.8rem;margin-top:20px;padding:12px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+<h1>⚔️ 战法回测验证报告</h1>
+<div class="subtitle">MACD面积入场 + 动态出场 · <span id="date"></span></div>
+<div id="app"></div>
+<div class="disclaimer">⚠️ 以上为量化回测结果，不构成投资建议。回测收益不代表未来表现。</div>
+<script>
+const D = {
+  "total_trades": 64,
+  "win_rate": 28.1,
+  "win_count": 18,
+  "loss_count": 46,
+  "avg_profit": 0.28,
+  "avg_win": 26.01,
+  "avg_loss": -9.79,
+  "total_return": 18.15,
+  "max_single_profit": 42.2,
+  "max_single_loss": -23.05,
+  "avg_holding_days": 44.8,
+  "reason_stats": {
+    "回测结束平仓": {
+      "count": 8,
+      "win_rate": 75.0,
+      "avg_pnl": 5.04
+    },
+    "止损": {
+      "count": 44,
+      "win_rate": 0.0,
+      "avg_pnl": -10.07
+    },
+    "止盈": {
+      "count": 12,
+      "win_rate": 100.0,
+      "avg_pnl": 35.07
+    }
+  },
+  "strength_analysis": {
+    "0.4-0.6": {
+      "count": 37,
+      "avg_pnl": 0.36,
+      "win_rate": 27.0
+    },
+    "0.6-0.8": {
+      "count": 26,
+      "avg_pnl": -0.12,
+      "win_rate": 26.9
+    },
+    "0.8-1.0": {
+      "count": 1,
+      "avg_pnl": 7.82,
+      "win_rate": 100.0
+    }
+  },
+  "baseline": {
+    "avg_return": 1.98,
+    "win_rate": 48.5,
+    "sample_count": 600
+  },
+  "alpha_vs_random": -1.69,
+  "failure_scenes": [
+    {
+      "scene": "利润回吐",
+      "count": 15,
+      "avg_loss": -11.27
+    },
+    {
+      "scene": "快速止损",
+      "count": 1,
+      "avg_loss": -9.33
+    }
+  ],
+  "stocks_tested": 24,
+  "stocks_with_trades": 24
+};
+const app = document.getElementById('app');
+document.getElementById('date').textContent = new Date().toLocaleDateString('zh-CN');
+
+function colorVal(v, suffix='%') {
+  const cls = v > 0 ? 'green' : v < 0 ? 'red' : '';
+  return `<span class="${cls}">${v > 0 ? '+' : ''}${v.toFixed(1)}${suffix}</span>`;
+}
+
+let html = '';
+
+// 总体统计
+html += `<div class="card"><h2>📊 总体表现</h2>`;
+html += `<div class="stat-grid">`;
+html += `<div class="stat"><div class="val ${D.win_rate > 50 ? 'green' : 'red'}">${D.win_rate}%</div><div class="lbl">胜率</div></div>`;
+html += `<div class="stat"><div class="val ${D.avg_profit > 0 ? 'green' : 'red'}">${D.avg_profit > 0 ? '+' : ''}${D.avg_profit}%</div><div class="lbl">平均收益</div></div>`;
+html += `<div class="stat"><div class="val green">${D.avg_win}%</div><div class="lbl">平均盈利</div></div>`;
+html += `<div class="stat"><div class="val red">${D.avg_loss}%</div><div class="lbl">平均亏损</div></div>`;
+html += `<div class="stat"><div class="val">${D.total_trades}</div><div class="lbl">总交易数</div></div>`;
+html += `<div class="stat"><div class="val">${D.avg_holding_days}天</div><div class="lbl">平均持有</div></div>`;
+html += `</div></div>`;
+
+// vs 随机对照
+const alpha = D.alpha_vs_random;
+html += `<div class="card"><h2>🎯 vs 随机入场对照</h2>`;
+html += `<table>`;
+html += `<tr><th>指标</th><th>战法</th><th>随机</th><th>Alpha</th></tr>`;
+html += `<tr><td>平均收益</td><td>${colorVal(D.avg_profit)}</td><td>${colorVal(D.baseline.avg_return)}</td><td><b>${colorVal(alpha)}</b></td></tr>`;
+html += `<tr><td>胜率</td><td>${D.win_rate}%</td><td>${D.baseline.win_rate}%</td><td>${(D.win_rate - D.baseline.win_rate).toFixed(1)}pp</td></tr>`;
+html += `<tr><td>样本数</td><td>${D.total_trades}</td><td>${D.baseline.sample_count}</td><td>-</td></tr>`;
+html += `</table>`;
+html += `<p style="color:var(--muted);font-size:0.85rem;margin-top:8px">Alpha = 战法平均收益 - 随机平均收益。正值说明战法有超额收益。</p>`;
+html += `</div>`;
+
+// 出场原因
+html += `<div class="card"><h2>🚪 出场原因分析</h2>`;
+html += `<table><tr><th>原因</th><th>次数</th><th>胜率</th><th>平均收益</th></tr>`;
+for (const [reason, s] of Object.entries(D.reason_stats)) {
+  html += `<tr><td>${reason}</td><td>${s.count}</td><td>${s.win_rate}%</td><td>${colorVal(s.avg_pnl)}</td></tr>`;
+}
+html += `</table></div>`;
+
+// 信号强度分析
+html += `<div class="card"><h2>📡 信号强度 vs 收益</h2>`;
+html += `<table><tr><th>强度区间</th><th>交易数</th><th>胜率</th><th>平均收益</th></tr>`;
+for (const [strength, s] of Object.entries(D.strength_analysis)) {
+  html += `<tr><td>${strength}</td><td>${s.count}</td><td>${s.win_rate}%</td><td>${colorVal(s.avg_pnl)}</td></tr>`;
+}
+html += `</table></div>`;
+
+// 失效场景
+if (D.failure_scenes && D.failure_scenes.length > 0) {
+  html += `<div class="card"><h2>⚠️ 信号失效场景Top5</h2>`;
+  for (const f of D.failure_scenes) {
+    html += `<div class="scene"><b>${f.scene}</b>：${f.count}次，平均亏损 ${f.avg_loss}%</div>`;
+  }
+  html += `</div>`;
+}
+
+// 覆盖范围
+html += `<div class="card"><h2>📋 覆盖范围</h2>`;
+html += `<p>测试股票数: ${D.stocks_tested} | 有信号股票: ${D.stocks_with_trades}</p>`;
+html += `</div>`;
+
+app.innerHTML = html;
+</script>
+</body>
+</html>

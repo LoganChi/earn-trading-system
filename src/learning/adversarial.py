@@ -125,8 +125,10 @@ def _compute_forward_returns(
     close: np.ndarray,
     dates: np.ndarray,
     entry_idx: int,
-    periods: List[int] = (5, 10, 20),
+    periods: Optional[List[int]] = None,
 ) -> Dict[int, float]:
+    if periods is None:
+        periods = [5, 10, 20]
     """计算入场后N天的收益"""
     returns = {}
     entry_price = close[entry_idx]

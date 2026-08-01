@@ -1,3 +1,4 @@
 *.pyc
 __pycache__/
 data/cache/
+data/trade_journal.jsonl

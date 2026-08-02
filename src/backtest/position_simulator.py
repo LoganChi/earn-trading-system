@@ -243,12 +243,15 @@ def _find_entry_time_minute(code, date_str, minute_df, signal_close):
         
         # 协同确认：MACD红柱放大 + 价格突破 = 买入
         time_str = str(times[i]) if times is not None else "10:00"
-        t = time_str[-5:] if len(str(time_str)) >= 5 else "10:00"
+        # 从"2026-01-06 09:30:00"提取"09:30"
+        if ' ' in time_str and ':' in time_str:
+            t = time_str.split(' ')[-1][:5]  # 取"09:30:00"的前5位"09:30"
+        elif len(time_str) >= 5:
+            t = time_str[-5:]
+        else:
+            t = "10:00"
         
         return prices[i], f"{date_str} {t}"
-    
-    # 全天没有MACD+价格协同信号 → 不入场
-    return None, None
 
 
 def _check_intraday_exit(code, date_str, entry_price, minute_df, stop_loss, take_profit, peak_profit):
@@ -394,10 +397,15 @@ def _check_intraday_macd_turn(code, date_str, entry_price, minute_df):
 
 
 def _filter_minute_by_date(minute_df, date_str):
-    """从分钟数据中筛选某一天"""
+    """从分钟数据中筛选某一天（兼容多种日期格式）"""
     if 'trade_time' not in minute_df.columns:
         return None
-    mask = minute_df['trade_time'].astype(str).str.startswith(date_str)
+    # date_str可能是20260106或2026-01-06，统一处理
+    clean_date = date_str.replace('-', '')
+    # 把trade_time转成和clean_date一样的格式
+    times = minute_df['trade_time'].astype(str)
+    # trade_time可能是2026-01-06 09:30:00或20260106 09:30:00
+    mask = times.str.replace('-', '').str.startswith(clean_date)
     result = minute_df[mask]
     return result if len(result) > 0 else None
 

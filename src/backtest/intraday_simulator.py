@@ -201,9 +201,15 @@ def run_intraday_backtest(
     for sig in entry_signals:
         entry_date = sig.date
         
-        # 避免重复入场
-        if last_entry_date and entry_date <= last_entry_date:
-            continue
+        # 避免重复入场（出场后至少冷却3个交易日，不管盈亏）
+        if last_entry_date:
+            # 找last_entry_date在all_dates中的位置
+            try:
+                last_idx = all_dates.index(last_entry_date)
+                if last_idx + 3 < len(all_dates) and entry_date < all_dates[last_idx + 3]:
+                    continue  # 出场后3个交易日内不再入场
+            except ValueError:
+                pass
         
         # P0: 大盘连跌过滤
         if market_df is not None:

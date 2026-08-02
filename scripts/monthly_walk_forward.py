@@ -33,7 +33,7 @@ def screen_stocks_monthly(end_date: str, lookback_days: int = 250) -> list:
     
     # 获取股票列表
     stocks = pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,industry')
-    stocks = stocks[~stocks['name'].str.contains('ST|退', na=False)]
+    stocks = stocks[~stocks['name'].str.contains('ST|退|\\*', na=False, regex=True)]
     stocks = stocks[~stocks['ts_code'].str.endswith('.BJ')]
     stocks = stocks[~stocks['symbol'].str.startswith(('300', '301', '688'))]
     
@@ -116,7 +116,14 @@ def screen_stocks_monthly(end_date: str, lookback_days: int = 250) -> list:
         if ratio < 2.0:
             continue
         
-        # 条件5: 有过涨停（pct_chg >= 9.8%）
+        # 条件5: 排除ST股 + 有过正常涨停
+        # ST判断：如果选股截止日附近5天的涨跌幅都在±5%以内，说明当前是ST
+        last5_pct = group['pct_chg'].tail(5).abs()
+        is_currently_st = (last5_pct <= 5.5).all() and (last5_pct >= 4.5).any()
+        if is_currently_st:
+            continue  # 当前是ST状态，跳过
+        
+        # 有过涨停（正常时期10%）
         limit_ups = group[group['pct_chg'] >= 9.8]
         if len(limit_ups) == 0:
             continue

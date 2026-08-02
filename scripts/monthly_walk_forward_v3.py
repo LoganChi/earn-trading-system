@@ -123,12 +123,36 @@ def screen_stocks_monthly(end_date, lookback_days=365):
         if close[-1] < 1:
             continue
         dif, dea, macd_bar = calc_macd(close)
-        recent_bars = macd_bar[-5:]
-        if not any(b > 0 for b in recent_bars):
+        # 粗筛条件：不要求当前翻红，只要绿峰面积够+底部位置
+        # 翻红判断交给v2信号引擎在每日交易时实时判断
+        recent_bars = macd_bar[-10:]  # 看10天
+        has_red = any(b > 0 for b in recent_bars)
+        # 如果最近10天无红柱且绿柱在加速放大（下跌加速期），排除
+        last3 = macd_bar[-3:]
+        green_accelerating = all(last3[i] < last3[i-1] for i in range(1, len(last3))) and all(b < 0 for b in last3)
+        if not has_red and green_accelerating:
             continue
         dates_arr = group['trade_date'].values
         peaks = find_green_peaks(macd_bar, dif, dates_arr, close)
-        if not peaks or peaks[-1].area < 5:
+        
+        # 绿峰面积判断：用历史最大绿峰面积，或最近绿峰+当前未完成绿峰的累积
+        if not peaks:
+            continue
+        
+        # 当前未完成的绿柱累积（如果最近是绿柱）
+        current_green_area = 0
+        for b in reversed(macd_bar):
+            if b < 0:
+                current_green_area += abs(b)
+            else:
+                break
+        
+        # 用历史最大绿峰和（当前未完成+最近完成）的较大值
+        max_peak_area = max(p.area for p in peaks)
+        recent_combined = (peaks[-1].area if peaks else 0) + current_green_area
+        effective_area = max(max_peak_area, recent_combined)
+        
+        if effective_area < 5:
             continue
         price_pos = calc_price_position(close, len(close)-1)
         if price_pos > 0.60:

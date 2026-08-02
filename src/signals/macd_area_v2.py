@@ -69,6 +69,15 @@ class WeeklyTrend:
 
 
 @dataclass
+class PriorTrade:
+    """历史交易记录（用于失败后重建的权重提升）"""
+    entry_date: str
+    exit_date: str
+    pnl_pct: float
+    was_loss: bool
+
+
+@dataclass
 class MultiPeakAnalysis:
     """多绿峰累积分析"""
     peaks: List[GreenPeak] = field(default_factory=list)
@@ -80,6 +89,11 @@ class MultiPeakAnalysis:
     
     # 入场判断
     exhaustion_level: float = 0.0  # 卖压耗尽程度 0-1
+    
+    # 历史交易记录
+    prior_losses: List[PriorTrade] = field(default_factory=list)
+    had_prior_loss: bool = False  # 是否有过亏损交易
+    full_cycle_after_loss: bool = False  # 亏损后是否经历了完整绿峰
 
 
 @dataclass
@@ -271,8 +285,12 @@ def calc_price_position(close: np.ndarray, idx: int, lookback: int = 120) -> flo
     return float((close[idx] - low) / (high - low))
 
 
-def generate_signals_v2(daily_df: pd.DataFrame) -> List[SignalV2]:
-    """生成v2信号（周K+多绿峰）"""
+def generate_signals_v2(daily_df: pd.DataFrame, prior_trades: list = None) -> List[SignalV2]:
+    """生成v2信号（周K+多绿峰+失败重建）
+    
+    Args:
+        prior_trades: 历史交易记录，格式 [{'entry_date': str, 'exit_date': str, 'pnl_pct': float}]
+    """
     df = daily_df.sort_values('trade_date').reset_index(drop=True)
     close = df['close'].values
     dates = df['trade_date'].values
@@ -290,6 +308,29 @@ def generate_signals_v2(daily_df: pd.DataFrame) -> List[SignalV2]:
     
     # 多绿峰分析
     multi_peak = analyze_multi_peak(all_peaks)
+    
+    # 分析历史交易：是否有过亏损，亏损后是否经历了完整绿峰
+    if prior_trades:
+        for pt in prior_trades:
+            if pt.get('pnl_pct', 0) < 0:  # 亏损交易
+                exit_date = pt.get('exit_date', '')
+                # 找亏损出场后的绿峰
+                try:
+                    exit_idx = list(dates).index(exit_date)
+                    # 找出场后形成的绿峰（面积≥5）
+                    for p in all_peaks:
+                        if p.start_idx >= exit_idx and p.area >= 5:
+                            multi_peak.had_prior_loss = True
+                            multi_peak.full_cycle_after_loss = True
+                            multi_peak.prior_losses.append(PriorTrade(
+                                entry_date=pt.get('entry_date', ''),
+                                exit_date=exit_date,
+                                pnl_pct=pt.get('pnl_pct', 0),
+                                was_loss=True,
+                            ))
+                            break
+                except ValueError:
+                    pass
     
     signals = []
     
@@ -341,6 +382,13 @@ def generate_signals_v2(daily_df: pd.DataFrame) -> List[SignalV2]:
         
         # 2. 卖压耗尽度（0-0.30分）
         score += multi_peak.exhaustion_level * 0.30
+        
+        # 2.5 失败后重建加分（0-0.15分）
+        # 如果之前亏损过，然后经历了一个完整绿峰（面积≥5）后再次翻红
+        # 说明卖压又充分释放了一轮，这次翻红的可信度更高
+        if multi_peak.full_cycle_after_loss:
+            score += 0.15
+            reasons.append("失败后完整绿峰重建✅")
         
         # 3. 入场时机（0-0.20分）
         # 绿峰结束后越早越好

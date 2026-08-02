@@ -34,7 +34,8 @@ class ScreenedStock:
     dif: float
     price_position: float
     composite_score: float
-    description: str
+    price_tier: str = ""  # 仙股(<3) / 低价(3-10) / 中价(10-50) / 高价(>50)
+    description: str = ""
 
 
 def batch_load_daily(trade_date: str) -> pd.DataFrame:
@@ -181,8 +182,8 @@ def screen_market_fast(end_date: str = "20260731",
         if pct_chg[-1] > 9.5:
             continue
         
-        # 排除价格过低（仙股）或过高
-        if close[-1] < 2 or close[-1] > 500:
+        # 排除价格过高（但保留仙股，低价股弹性大）
+        if close[-1] > 500:
             continue
         
         # 计算MACD
@@ -239,6 +240,17 @@ def screen_market_fast(end_date: str = "20260731",
                 f"MACD{'红' if macd_bar[-1] > 0 else '近翻红'} "
                 f"位置{price_pos:.0%} 评分{score:.0%}")
         
+        # 价格分档
+        p = close[-1]
+        if p < 3:
+            tier = "仙股"
+        elif p < 10:
+            tier = "低价"
+        elif p < 50:
+            tier = "中价"
+        else:
+            tier = "高价"
+        
         results.append(ScreenedStock(
             code=ts_code.split('.')[0],
             name=stock_info.get('name', ''),
@@ -251,6 +263,7 @@ def screen_market_fast(end_date: str = "20260731",
             dif=round(dif[-1], 4),
             price_position=round(price_pos, 2),
             composite_score=round(score, 2),
+            price_tier=tier,
             description=desc,
         ))
     

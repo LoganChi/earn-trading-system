@@ -250,40 +250,55 @@ def generate_signals(df: pd.DataFrame, lookback: int = 60) -> List[MACDAreaSigna
                 break
         
         # 入场信号判断
-        if last_gp and last_gp.end_idx <= i and (i - last_gp.end_idx) <= 5:
-            # 绿峰刚结束（5天内），红柱开始出现
+        if last_gp and last_gp.end_idx <= i and (i - last_gp.end_idx) <= 3:
+            # 绿峰刚结束（3天内），红柱刚开始积累
             if macd_bar[i] > 0 and dif[i] < 0:  # 零轴下方翻红
-                sig.signal_type = "entry_candidate"
-                sig.green_peak_area = last_gp.area
-                sig.green_peak_severity = last_gp.severity
-                sig.red_peak_expanding = current_rp.is_expanding if current_rp else False
-                sig.dif_turning_up = dif[i] > dif[i-1] if i > 0 else False
-                sig.price_position = calc_price_position(close, i, lookback)
+                # 关键：检查红柱是否已经积累过大（红峰面积）
+                # 计算当前红峰的累积面积
+                current_red_area = 0
+                for j in range(i, max(i-10, 0), -1):
+                    if macd_bar[j] > 0:
+                        current_red_area += macd_bar[j]
+                    else:
+                        break
                 
-                # 信号强度计算
-                strength = 0.0
-                if last_gp.severity == "deep":
-                    strength += 0.4
-                elif last_gp.severity == "moderate":
-                    strength += 0.2
-                
-                if sig.red_peak_expanding:
-                    strength += 0.3
-                if sig.dif_turning_up:
-                    strength += 0.2
-                
-                # 价格位置加成：越接近底部越强
-                if sig.price_position < 0.3:
-                    strength += 0.1
-                
-                sig.signal_strength = min(1.0, strength)
-                
-                sig.description = (
-                    f"绿峰面积{last_gp.area:.1f}({last_gp.severity}) "
-                    f"DIF={dif[i]:.3f} 红柱{'放大' if sig.red_peak_expanding else '未放大'} "
-                    f"价格位置{sig.price_position:.0%} "
-                    f"强度{sig.signal_strength:.0%}"
-                )
+                # 红柱积累过大=已经是红峰峰值附近，不应入场
+                if current_red_area > abs(last_gp.area) * 0.3:
+                    # 红峰面积已超过绿峰的30%，太迟了
+                    sig.signal_type = "neutral"
+                else:
+                    sig.signal_type = "entry_candidate"
+                    sig.green_peak_area = last_gp.area
+                    sig.green_peak_severity = last_gp.severity
+                    sig.red_peak_expanding = current_rp.is_expanding if current_rp else False
+                    sig.dif_turning_up = dif[i] > dif[i-1] if i > 0 else False
+                    sig.price_position = calc_price_position(close, i, lookback)
+                    
+                    # 信号强度计算
+                    strength = 0.0
+                    if last_gp.severity == "deep":
+                        strength += 0.4
+                    elif last_gp.severity == "moderate":
+                        strength += 0.2
+                    
+                    if sig.red_peak_expanding:
+                        strength += 0.3
+                    if sig.dif_turning_up:
+                        strength += 0.2
+                    
+                    # 价格位置加成：越接近底部越强
+                    if sig.price_position < 0.3:
+                        strength += 0.1
+                    
+                    sig.signal_strength = min(1.0, strength)
+                    
+                    sig.description = (
+                        f"绿峰面积{last_gp.area:.1f}({last_gp.severity}) "
+                        f"DIF={dif[i]:.3f} 红柱{'放大' if sig.red_peak_expanding else '未放大'} "
+                        f"红峰积累{current_red_area:.1f}/{last_gp.area:.1f}({current_red_area/max(abs(last_gp.area),0.01):.0%}) "
+                        f"价格位置{sig.price_position:.0%} "
+                        f"强度{sig.signal_strength:.0%}"
+                    )
         
         # 出场预警
         elif current_rp and i > current_rp.start_idx + 2:

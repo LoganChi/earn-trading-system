@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.loader import load_daily, load_index, _init_tushare
 from src.signals.macd_area import calc_macd, find_green_peaks, calc_price_position
+from src.signals.macd_area_v2 import generate_signals_v2
 from src.backtest.intraday_simulator import load_minute_data, run_intraday_backtest
 
 

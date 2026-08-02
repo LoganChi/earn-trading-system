@@ -189,10 +189,18 @@ def run():
                               'total_pnl_pct': 0, 'total_pnl_yuan': 0, 'stops': 0, 'macd_exits': 0})
             continue
         
+        # 按价格分档取标的（保证各档都有代表）
+        low = [s for s in screened if s['close'] < 10][:12]
+        mid = [s for s in screened if 10 <= s['close'] < 30][:12]
+        high = [s for s in screened if s['close'] >= 30][:8]
+        backtest_universe = low + mid + high
+        
+        print(f'  分档: 低价{len(low)} 中价{len(mid)} 高价{len(high)} = {len(backtest_universe)}只')
+        
         # 收集当月所有入场信号
         all_entries = []
         
-        for s in screened[:30]:
+        for s in backtest_universe:
             code = s['code']
             try:
                 bt_start_dt = datetime.strptime(bt_start, '%Y%m%d')

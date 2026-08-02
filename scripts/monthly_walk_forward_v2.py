@@ -7,7 +7,89 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.loader import load_daily, load_index, _init_tushare
-from src.signals.macd_area_v2 import generate_signals_v2
+from src.signals.macd_area_v2 import generate_signals_v2 as _gen_v2_original
+from src.signals.price_zone import analyze_price_zone
+
+
+def generate_signals_v2(daily_df):
+    """v2信号 + 价格区间整合"""
+    # 先调原始v2
+    sigs = _gen_v2_original(daily_df)
+    if not sigs:
+        return sigs
+    
+    df = daily_df.sort_values('trade_date').reset_index(drop=True)
+    close = df['close'].values
+    high = df['high'].values
+    low = df['low'].values
+    vol = df['vol'].values if 'vol' in df.columns else None
+    
+    # 对每个信号加上价格区间分析
+    for sig in sigs:
+        # 找sig在数据中的位置
+        sig_rows = df[df['trade_date'].astype(str) == sig.date]
+        if len(sig_rows) == 0:
+            continue
+        sig_idx = sig_rows.index[0]
+        
+        # 价格区间分析（用截至sig日的60天数据）
+        lookback = min(60, sig_idx + 1)
+        if lookback < 20:
+            continue
+        
+        zone = analyze_price_zone(
+            close[max(0, sig_idx-lookback+1):sig_idx+1],
+            high[max(0, sig_idx-lookback+1):sig_idx+1],
+            low[max(0, sig_idx-lookback+1):sig_idx+1],
+            vol[max(0, sig_idx-lookback+1):sig_idx+1] if vol is not None else None,
+            lookback=lookback,
+        )
+        
+        if zone is None:
+            continue
+        
+        # 价格区间加分逻辑
+        zone_bonus = 0.0
+        
+        if zone.current_position == "lower" and zone.strength > 0.5:
+            # 价格在区间下沿 + 区间强度高 = 强支撑
+            zone_bonus = 0.15
+        
+        if zone.current_position == "below" and zone.breakout_direction == "down":
+            # 跌破区间下沿 = 弱势，减分
+            zone_bonus = -0.10
+        
+        if zone.current_position == "upper" and zone.strength > 0.5:
+            # 在区间上沿 = 接近阻力，减分
+            zone_bonus = -0.05
+        
+        if zone.current_position == "above" and zone.breakout_direction == "up":
+            # 突破区间上沿 = 强势，但可能是假突破
+            if zone.touches_upper >= 3:
+                zone_bonus = 0.10  # 多次试探后突破=真突破概率高
+            else:
+                zone_bonus = -0.05  # 试探次数少=假突破概率高
+        
+        # 整理充分+区间强度高 = 加分
+        if zone.consolidation_days > 20 and zone.strength > 0.6:
+            zone_bonus += 0.05
+        
+        # 更新信号
+        original_strength = sig.signal_strength
+        sig.signal_strength = max(0, min(1.0, original_strength + zone_bonus))
+        
+        # 如果价格区间减分导致从entry降到wait
+        if sig.signal_type == "entry" and sig.signal_strength < 0.45:
+            sig.signal_type = "wait"
+        
+        # 如果价格区间加分导致从wait升到entry
+        if sig.signal_type == "wait" and sig.signal_strength >= 0.55 and original_strength >= 0.40:
+            sig.signal_type = "entry"
+        
+        # 更新描述
+        sig.description += f" | 区间{zone.lower}-{zone.upper} 位置{zone.current_position} 强度{zone.strength:.0%}"
+    
+    return sigs
 from src.backtest.intraday_simulator import load_minute_data
 
 

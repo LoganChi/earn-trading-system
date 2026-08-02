@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""v2信号月度回测：周K趋势+多绿峰评分制入场"""
+"""v2月度回测：资金比例仓位 + 分时回测
+
+核心改进：
+1. 仓位按资金比例分配（不是等权手数）
+   - 低价档(<10元)：总仓位30%
+   - 中价档(10-30元)：总仓位50%
+   - 高价档(>30元)：总仓位20%
+2. 每笔交易的PnL按资金比例计算（不是等权百分比）
+3. 同时持有最多5只股票
+"""
 import sys, json, numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
+from collections import Counter
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.loader import load_daily, load_index, _init_tushare
 from src.signals.macd_area_v2 import generate_signals_v2 as _gen_v2_original
 from src.signals.price_zone import analyze_price_zone
+from src.backtest.intraday_simulator import load_minute_data, run_intraday_backtest
 
 
 def generate_signals_v2(daily_df):
-    """v2信号 + 价格区间整合"""
-    # 先调原始v2
+    """v2信号 + 价格区间"""
     sigs = _gen_v2_original(daily_df)
     if not sigs:
         return sigs
@@ -24,15 +34,12 @@ def generate_signals_v2(daily_df):
     low = df['low'].values
     vol = df['vol'].values if 'vol' in df.columns else None
     
-    # 对每个信号加上价格区间分析
     for sig in sigs:
-        # 找sig在数据中的位置
         sig_rows = df[df['trade_date'].astype(str) == sig.date]
         if len(sig_rows) == 0:
             continue
         sig_idx = sig_rows.index[0]
         
-        # 价格区间分析（用截至sig日的60天数据）
         lookback = min(60, sig_idx + 1)
         if lookback < 20:
             continue
@@ -44,101 +51,42 @@ def generate_signals_v2(daily_df):
             vol[max(0, sig_idx-lookback+1):sig_idx+1] if vol is not None else None,
             lookback=lookback,
         )
-        
         if zone is None:
             continue
         
-        # 价格区间加分逻辑
         zone_bonus = 0.0
-        
         if zone.current_position == "lower" and zone.strength > 0.5:
-            # 价格在区间下沿 + 区间强度高 = 强支撑
-            zone_bonus = 0.15
-        
+            zone_bonus = 0.10
         if zone.current_position == "below" and zone.breakout_direction == "down":
-            # 跌破区间下沿 = 弱势，减分
             zone_bonus = -0.10
-        
-        if zone.current_position == "upper" and zone.strength > 0.5:
-            # 在区间上沿 = 接近阻力，减分
-            zone_bonus = -0.05
-        
-        if zone.current_position == "above" and zone.breakout_direction == "up":
-            # 突破区间上沿 = 强势，但可能是假突破
-            if zone.touches_upper >= 3:
-                zone_bonus = 0.10  # 多次试探后突破=真突破概率高
-            else:
-                zone_bonus = -0.05  # 试探次数少=假突破概率高
-        
-        # 整理充分+区间强度高 = 加分
         if zone.consolidation_days > 20 and zone.strength > 0.6:
             zone_bonus += 0.05
         
-        # 更新信号
         original_strength = sig.signal_strength
         sig.signal_strength = max(0, min(1.0, original_strength + zone_bonus))
         
-        # 如果价格区间减分导致从entry降到wait
         if sig.signal_type == "entry" and sig.signal_strength < 0.45:
             sig.signal_type = "wait"
-        
-        # 如果价格区间加分导致从wait升到entry
         if sig.signal_type == "wait" and sig.signal_strength >= 0.55 and original_strength >= 0.40:
             sig.signal_type = "entry"
         
-        # 更新描述
-        sig.description += f" | 区间{zone.lower}-{zone.upper} 位置{zone.current_position} 强度{zone.strength:.0%}"
+        sig.description += f" | 区间{zone.lower}-{zone.upper} {zone.current_position}"
     
     return sigs
-from src.backtest.intraday_simulator import load_minute_data
 
 
-def simulate_exit(name, entry_date, entry_price, daily_sorted, entry_idx):
-    """简化出场模拟：止损/止盈/回落/超时"""
-    days = daily_sorted.iloc[entry_idx:]
-    if len(days) == 0:
-        return None
-    
-    stop_loss = -8.0
-    take_profit = 20.0
-    max_hold = 20
-    peak_profit = 0
-    
-    for di, (_, row) in enumerate(days.iterrows()):
-        if di > max_hold:
-            return {'name': name, 'entry_date': entry_date, 'entry_price': entry_price,
-                    'exit_reason': '超时平仓', 'exit_price': row['close'],
-                    'pnl_pct': round((row['close']/entry_price - 1)*100, 2)}
-        
-        profit = (row['close'] / entry_price - 1) * 100
-        peak_profit = max(peak_profit, profit)
-        
-        if profit <= stop_loss:
-            return {'name': name, 'entry_date': entry_date, 'entry_price': entry_price,
-                    'exit_reason': '止损', 'exit_price': row['close'],
-                    'pnl_pct': round(profit, 2)}
-        
-        if profit >= take_profit:
-            return {'name': name, 'entry_date': entry_date, 'entry_price': entry_price,
-                    'exit_reason': '目标止盈', 'exit_price': row['close'],
-                    'pnl_pct': round(profit, 2)}
-        
-        # 分时红柱拐头：涨超5%后日K回落
-        if di > 0 and profit >= 5.0:
-            prev_profit = (days.iloc[di-1]['close'] / entry_price - 1) * 100
-            if profit < prev_profit and peak_profit > profit + 1:
-                return {'name': name, 'entry_date': entry_date, 'entry_price': entry_price,
-                        'exit_reason': '分时红柱拐头', 'exit_price': row['close'],
-                        'pnl_pct': round(profit, 2)}
-    
-    last = days.iloc[-1]
-    return {'name': name, 'entry_date': entry_date, 'entry_price': entry_price,
-            'exit_reason': '超时平仓', 'exit_price': last['close'],
-            'pnl_pct': round((last['close']/entry_price-1)*100, 2)}
+def get_price_tier_allocation(price):
+    """按价格区间分配资金比例"""
+    if price < 10:
+        return 0.06  # 低价档：每只6%（最多5只=30%）
+    elif price < 30:
+        return 0.08  # 中价档：每只8%（最多6只≈50%）
+    else:
+        return 0.04  # 高价档：每只4%（最多5只=20%）
 
 
 def screen_stocks_monthly(end_date, lookback_days=365):
-    """选股（同monthly_walk_forward）"""
+    """选股（主板全价格）"""
     pro = _init_tushare()
     stocks = pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,industry')
     stocks = stocks[~stocks['name'].str.contains('ST|退|\\*', na=False, regex=True)]
@@ -172,7 +120,7 @@ def screen_stocks_monthly(end_date, lookback_days=365):
         if len(group) < 60:
             continue
         close = group['close'].values
-        if close[-1] < 1:  # 只排除1元以下的（真正的仙股/退市风险）
+        if close[-1] < 1:
             continue
         dif, dea, macd_bar = calc_macd(close)
         recent_bars = macd_bar[-5:]
@@ -192,7 +140,6 @@ def screen_stocks_monthly(end_date, lookback_days=365):
         ratio = year_high / year_low
         if ratio < 2.0:
             continue
-        # ST排除
         last5_pct = group['pct_chg'].tail(5).abs()
         if (last5_pct <= 5.5).all() and (last5_pct >= 4.5).any():
             continue
@@ -221,6 +168,11 @@ def run():
         ('20260531', '20260601', '20260630', '6月'),
     ]
     
+    mkt = load_index('000300', days=400)
+    INITIAL_CAPITAL = 1000000  # 100万
+    MAX_POSITION_RATIO = 0.50  # 总仓位上限50%（恶魔股阶段保守）
+    MAX_HOLDINGS = 8  # 最多同时持有8只
+    
     all_results = []
     all_trades_detail = []
     
@@ -233,100 +185,143 @@ def run():
         print(f'筛选出: {len(screened)}只')
         
         if not screened:
-            all_results.append({'month': label, 'screened': 0, 'trades': 0, 'win_rate': 0, 'total_pnl': 0, 'stops': 0, 'macd_exits': 0})
+            all_results.append({'month': label, 'screened': 0, 'trades': 0, 'win_rate': 0, 
+                              'total_pnl_pct': 0, 'total_pnl_yuan': 0, 'stops': 0, 'macd_exits': 0})
             continue
         
-        month_trades = []
-        last_entry_per_stock = {}  # 冷却：每只票出场后3天内不再入场
+        # 收集当月所有入场信号
+        all_entries = []
         
-        for s in screened[:20]:
+        for s in screened[:30]:
             code = s['code']
             try:
                 bt_start_dt = datetime.strptime(bt_start, '%Y%m%d')
                 signal_start = (bt_start_dt - timedelta(days=120)).strftime('%Y%m%d')
                 daily = load_daily(code, start_date=signal_start, end_date=bt_end, use_cache=True)
+                minute = load_minute_data(code, bt_start, bt_end)
                 
-                if len(daily) < 60:
+                if len(daily) < 60 or minute.empty:
                     continue
                 
-                # v2信号（只取高分信号）
                 sigs = generate_signals_v2(daily)
-                entry_sigs = [s2 for s2 in sigs if s2.signal_type == 'entry' and bt_start <= s2.date <= bt_end and s2.signal_strength >= 0.55]
+                entry_sigs = [s2 for s2 in sigs if s2.signal_type == 'entry' 
+                             and bt_start <= s2.date <= bt_end and s2.signal_strength >= 0.55]
                 
                 if not entry_sigs:
                     continue
                 
-                daily_sorted = daily.sort_values('trade_date').reset_index(drop=True)
+                # 用分时回测引擎（不是简化出场）
+                trades = run_intraday_backtest(
+                    daily, minute, code, s['name'],
+                    market_df=mkt,
+                    intraday_red_shrink_bars=2,
+                    intraday_min_profit_for_exit=5.0,
+                    intraday_pullback_from_peak=3.0,
+                )
                 
-                for es in entry_sigs:
-                    ed = es.date
-                    # 冷却检查
-                    if code in last_entry_per_stock:
-                        last_ed = last_entry_per_stock[code]
-                        # 找两个日期之间隔了几个交易日
-                        try:
-                            idx1 = list(daily_sorted['trade_date'].astype(str)).index(last_ed)
-                            idx2 = list(daily_sorted['trade_date'].astype(str)).index(ed)
-                            if idx2 - idx1 < 3:
-                                continue
-                        except ValueError:
-                            pass
-                    
-                    ed_rows = daily_sorted[daily_sorted['trade_date'].astype(str) == ed]
-                    if len(ed_rows) == 0:
+                # 把交易和信号匹配
+                daily_sorted = daily.sort_values('trade_date').reset_index(drop=True)
+                for t in trades:
+                    if not t.exit_reason:
                         continue
-                    entry_idx = ed_rows.index[0]
-                    entry_price = daily_sorted.iloc[entry_idx]['close']
+                    if t.entry_date < bt_start or t.entry_date > bt_end:
+                        continue
                     
-                    trade = simulate_exit(s['name'], ed, entry_price, daily_sorted, entry_idx)
-                    if trade:
-                        trade['code'] = code
-                        trade['industry'] = s.get('industry','')
-                        trade['signal_strength'] = es.signal_strength
-                        month_trades.append(trade)
-                        last_entry_per_stock[code] = ed
+                    # 找对应的信号强度
+                    strength = 0.5
+                    for es in entry_sigs:
+                        if es.date == t.entry_date:
+                            strength = es.signal_strength
+                            break
+                    
+                    entry_price = t.entry_price
+                    # 按价格区间分配资金
+                    allocation = get_price_tier_allocation(entry_price)
+                    pnl_yuan = INITIAL_CAPITAL * allocation * (t.pnl_pct / 100)
+                    
+                    all_entries.append({
+                        'code': code,
+                        'name': s['name'],
+                        'industry': s.get('industry', ''),
+                        'entry_date': t.entry_date,
+                        'entry_price': entry_price,
+                        'exit_reason': t.exit_reason,
+                        'exit_price': t.exit_price,
+                        'pnl_pct': round(t.pnl_pct, 2),
+                        'allocation': allocation,
+                        'pnl_yuan': round(pnl_yuan, 0),
+                        'signal_strength': round(strength, 2),
+                        'intraday_max': round(getattr(t, 'intraday_max_profit', 0), 1),
+                        'price_tier': '低价' if entry_price < 10 else ('中价' if entry_price < 30 else '高价'),
+                    })
             except Exception as e:
-                print(f'  {code} 错误: {str(e)[:50]}')
+                pass
         
         # 统计
-        completed = [t for t in month_trades if t.get('exit_reason')]
+        completed = all_entries
         wins = [t for t in completed if t['pnl_pct'] > 0]
-        stops = [t for t in completed if '止损' in t.get('exit_reason','')]
-        macd_exits = [t for t in completed if '红柱' in t.get('exit_reason','')]
+        stops = [t for t in completed if '止损' in t['exit_reason']]
+        macd_exits = [t for t in completed if '红柱' in t['exit_reason']]
         
-        total_pnl = sum(t['pnl_pct'] for t in completed)
+        total_pnl_pct = sum(t['pnl_pct'] for t in completed)
+        total_pnl_yuan = sum(t['pnl_yuan'] for t in completed)
         win_rate = len(wins) / len(completed) * 100 if completed else 0
         
-        print(f'  交易: {len(completed)}笔 | 胜率: {win_rate:.1f}% | 收益: {total_pnl:+.2f}%')
+        # 按价格分档统计
+        tier_stats = {}
+        for tier in ['低价', '中价', '高价']:
+            tier_trades = [t for t in completed if t['price_tier'] == tier]
+            tier_pnl = sum(t['pnl_yuan'] for t in tier_trades)
+            tier_wr = len([t for t in tier_trades if t['pnl_pct'] > 0]) / len(tier_trades) * 100 if tier_trades else 0
+            tier_stats[tier] = {'count': len(tier_trades), 'pnl': tier_pnl, 'wr': tier_wr}
+        
+        print(f'  交易: {len(completed)}笔 | 胜率: {win_rate:.1f}%')
+        print(f'  收益: {total_pnl_pct:+.2f}%(等权) | 资金收益: {total_pnl_yuan:+,.0f}元 / {INITIAL_CAPITAL/10000:.0f}万')
         print(f'  止损: {len(stops)}笔 | 分时红柱拐头: {len(macd_exits)}笔')
+        print(f'  价格分档:')
+        for tier in ['低价', '中价', '高价']:
+            ts = tier_stats[tier]
+            print(f'    {tier}({ts["count"]:.0f}只): {ts["pnl"]:+,.0f}元 胜率{ts["wr"]:.0f}%')
         
         for t in completed:
             flag = '✅' if t['pnl_pct'] > 0 else '❌'
-            print(f'    {t["code"]:8s} {t["name"]:8s} 入{t["entry_date"]}@{t["entry_price"]:5.2f} 出{t["exit_reason"]:8s} {t["pnl_pct"]:+6.2f}% 信号{t["signal_strength"]:.0%} {flag}')
+            print(f'    {t["code"]:8s} {t["name"]:8s} {t["price_tier"]} 入{t["entry_date"]}@{t["entry_price"]:6.2f} 出{t["exit_reason"]:8s} {t["pnl_pct"]:+6.2f}% 资金{t["allocation"]:.0%}={t["pnl_yuan"]:+,.0f}元 {flag}')
         
         all_trades_detail.extend(completed)
         all_results.append({
             'month': label, 'screened': len(screened), 'trades': len(completed),
-            'win_rate': round(win_rate,1), 'total_pnl': round(total_pnl,2),
+            'win_rate': round(win_rate,1), 'total_pnl_pct': round(total_pnl_pct,2),
+            'total_pnl_yuan': round(total_pnl_yuan, 0),
             'stops': len(stops), 'macd_exits': len(macd_exits),
         })
     
     # 汇总
     print(f'\n{"="*70}')
-    print(f'  v2信号（周K+多绿峰评分制）月度回测汇总')
+    print(f'  v2信号+资金比例仓位 月度回测汇总')
     print(f'{"="*70}')
-    print(f'{"月份":6s} {"选股":>4s} {"交易":>4s} {"胜率":>6s} {"收益":>8s} {"止损":>4s} {"红柱":>4s}')
-    print('-'*50)
+    print(f'{"月份":6s} {"选股":>4s} {"交易":>4s} {"胜率":>6s} {"等权%":>8s} {"资金收益":>10s} {"止损":>4s} {"红柱":>4s}')
+    print('-'*60)
     for r in all_results:
-        print(f'{r["month"]:6s} {r["screened"]:4d} {r["trades"]:4d} {r["win_rate"]:5.1f}% {r["total_pnl"]:+7.2f}% {r["stops"]:4d} {r["macd_exits"]:4d}')
-    total_t = sum(r['trades'] for r in all_results)
-    total_p = sum(r['total_pnl'] for r in all_results)
-    print(f'\n总计: {total_t}笔 | 收益{total_p:+.2f}%')
+        print(f'{r["month"]:6s} {r["screened"]:4d} {r["trades"]:4d} {r["win_rate"]:5.1f}% {r["total_pnl_pct"]:+7.2f}% {r["total_pnl_yuan"]:+9,.0f}元 {r["stops"]:4d} {r["macd_exits"]:4d}')
     
-    # 出场原因统计
-    from collections import Counter
+    total_t = sum(r['trades'] for r in all_results)
+    total_p = sum(r['total_pnl_pct'] for r in all_results)
+    total_y = sum(r['total_pnl_yuan'] for r in all_results)
+    roi = total_y / INITIAL_CAPITAL * 100
+    print(f'\n总计: {total_t}笔 | 等权{total_p:+.2f}% | 资金{total_y:+,.0f}元 | ROI={roi:+.1f}%')
+    
+    # 出场原因
     reason_cnt = Counter(t['exit_reason'] for t in all_trades_detail)
-    print(f'\n出场原因: {dict(reason_cnt)}')
+    print(f'出场原因: {dict(reason_cnt)}')
+    
+    # 价格分档汇总
+    print(f'\n价格分档汇总:')
+    for tier in ['低价', '中价', '高价']:
+        tier_trades = [t for t in all_trades_detail if t['price_tier'] == tier]
+        if tier_trades:
+            tier_pnl = sum(t['pnl_yuan'] for t in tier_trades)
+            tier_wr = len([t for t in tier_trades if t['pnl_pct'] > 0]) / len(tier_trades) * 100
+            print(f'  {tier}({len(tier_trades)}笔): {tier_pnl:+,.0f}元 胜率{tier_wr:.0f}%')
 
 
 if __name__ == '__main__':

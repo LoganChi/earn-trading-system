@@ -194,11 +194,10 @@ def run():
                 first_entry = entry_sigs[0]
                 traded_codes.add(code)
                 
-                # 用新的持仓周期模拟器
+                # 用新的持仓周期模拟器（日K定信号日，分时定买入时机）
                 pos = simulate_position(
                     code=code, name=s['name'],
                     entry_date=first_entry.date,
-                    entry_price=first_entry.price,
                     daily_df=daily,
                     minute_df=minute,
                     allocation=get_price_tier_allocation(first_entry.price),

@@ -58,7 +58,6 @@ def simulate_position(
     code: str,
     name: str,
     entry_date: str,
-    entry_price: float,
     daily_df: pd.DataFrame,
     minute_df: pd.DataFrame,
     allocation: float = 0.08,
@@ -67,88 +66,86 @@ def simulate_position(
     stop_loss_pct: float = -8.0,
     take_profit_pct: float = 20.0,
 ) -> Optional[Position]:
-    """模拟一个持仓周期
+    """模拟一个持仓周期（分时级别入场+出场）
     
-    从entry_date开始，每天检查是否该出场。
-    出场条件（每天收盘检查+盘中分钟检查）：
-    1. 止损：收盘价跌破入场价-8%
-    2. 止盈：浮盈达到+20%
-    3. 动能衰竭：日K MACD红柱连续缩短3天（需要先有红柱）
-    4. 分时红柱拐头：盘中分时MACD红柱缩短→精确出场点
-    
-    没有固定持仓天数限制。
+    流程：
+    1. entry_date是日K信号日（当天收盘后确认信号）
+    2. 第二天盘中找买入时机（开盘后等回调，不追高）
+    3. 买入后逐日检查出场条件（分时级别精确到分钟）
+    4. 没有固定持仓天数
     """
     df = daily_df.sort_values('trade_date').reset_index(drop=True)
     
-    # 找入场日在数据中的位置
+    # 找信号日在数据中的位置
     entry_rows = df[df['trade_date'].astype(str) == entry_date]
     if len(entry_rows) == 0:
         return None
-    entry_idx = entry_rows.index[0]
+    signal_idx = entry_rows.index[0]
+    
+    # 第二天才是实际买入日
+    if signal_idx + 1 >= len(df):
+        return None
+    buy_idx = signal_idx + 1
+    buy_date = str(df.iloc[buy_idx]['trade_date'])
+    
+    # 分时级别找买入时机：第二天开盘后等回调
+    entry_price, entry_time = _find_entry_time_minute(code, buy_date, minute_df, df.iloc[signal_idx]['close'])
+    if entry_price is None:
+        # 无法从分时找到入场点，用次日开盘价
+        entry_price = df.iloc[buy_idx]['open']
+        entry_time = f"{buy_date} 09:30"
     
     pos = Position(
         code=code, name=name,
-        entry_date=entry_date, entry_price=entry_price,
+        entry_date=buy_date, entry_price=entry_price,
         allocation=allocation, signal_strength=signal_strength,
         peak_price=entry_price,
         tier='低价' if entry_price < 10 else ('中价' if entry_price < 30 else '高价'),
     )
     
-    # 计算日K MACD（用入场前60天+持仓期）
     close_all = df['close'].values
-    high_all = df['high'].values
-    low_all = df['low'].values
-    
-    # 简化MACD计算
     dif, dea, macd_bar = _calc_macd(close_all)
     
-    # 追踪日K红柱缩短
-    red_shrink_days = 0  # 连续缩短天数
-    had_red_peak = False  # 是否出现过红柱峰值
+    red_shrink_days = 0
+    had_red_peak = False
     
-    # 从入场日次日开始逐日检查
-    for i in range(entry_idx + 1, len(df)):
+    # 从买入日开始逐日检查
+    for i in range(buy_idx, len(df)):
         row = df.iloc[i]
         current_date = str(row['trade_date'])
         current_close = row['close']
         current_high = row['high']
         current_low = row['low']
         
-        pos.holding_days += 1
+        if i > buy_idx:
+            pos.holding_days += 1
+        
         pos.peak_price = max(pos.peak_price, current_high)
         pos.peak_profit = max(pos.peak_profit, (pos.peak_price / entry_price - 1) * 100)
         
+        # === 分时级别出场检查 ===
+        # 每天用分钟数据找精确出场点
+        exit_result = _check_intraday_exit(
+            code, current_date, entry_price, minute_df,
+            stop_loss_pct, take_profit_pct,
+            pos.peak_profit if pos.holding_days > 0 else 0,
+        )
+        
+        if exit_result:
+            exit_time, exit_price, exit_reason = exit_result
+            pos.exit_date = current_date
+            pos.exit_price = exit_price
+            pos.exit_reason = exit_reason
+            pos.pnl_pct = (exit_price / entry_price - 1) * 100
+            pos.is_open = False
+            pos.exit_time = exit_time
+            pos.holding_minutes = pos.holding_days * 240 + _time_to_minutes(exit_time)
+            return pos
+        
+        # === 日K级别补充检查（盘后确认）===
         profit = (current_close / entry_price - 1) * 100
         
-        # === 每日收盘检查 ===
-        
-        # 1. 止损
-        if profit <= stop_loss_pct:
-            pos.exit_date = current_date
-            pos.exit_price = current_close
-            pos.exit_reason = "止损"
-            pos.pnl_pct = profit
-            pos.is_open = False
-            
-            # 尝试用分钟数据找精确出场时间
-            exit_time = _find_exit_time_minute(code, current_date, entry_price, stop_loss_pct, minute_df)
-            pos.exit_time = exit_time or f"{current_date} 15:00"
-            pos.holding_minutes = pos.holding_days * 240
-            return pos
-        
-        # 2. 止盈
-        if profit >= take_profit_pct:
-            pos.exit_date = current_date
-            pos.exit_price = current_close
-            pos.exit_reason = "目标止盈"
-            pos.pnl_pct = profit
-            pos.is_open = False
-            exit_time = _find_exit_time_minute(code, current_date, entry_price, take_profit_pct, minute_df, is_profit=True)
-            pos.exit_time = exit_time or f"{current_date} 15:00"
-            pos.holding_minutes = pos.holding_days * 240
-            return pos
-        
-        # 3. 日K MACD动能衰竭
+        # 日K动能衰竭
         if macd_bar[i] > 0:
             had_red_peak = True
             if i > 0 and macd_bar[i] < macd_bar[i-1]:
@@ -156,9 +153,7 @@ def simulate_position(
             else:
                 red_shrink_days = 0
         else:
-            # 红柱消失（转绿）
-            if had_red_peak and red_shrink_days >= 2:
-                # 红柱曾经存在，缩短了2天以上，现在转绿→出场
+            if had_red_peak and red_shrink_days >= 3:
                 pos.exit_date = current_date
                 pos.exit_price = current_close
                 pos.exit_reason = "日K动能衰竭"
@@ -169,29 +164,13 @@ def simulate_position(
                 return pos
             red_shrink_days = 0
         
-        # 4. 分时红柱拐头（只在有浮盈时触发）
-        if profit >= 5.0 and had_red_peak:
-            exit_time = _check_intraday_macd_turn(
-                code, current_date, entry_price, minute_df
-            )
-            if exit_time:
-                # 分时级别找到出场点
-                pos.exit_date = current_date
-                pos.exit_price = _get_price_at_time(minute_df, current_date, exit_time) or current_close
-                pos.exit_reason = "分时红柱拐头"
-                pos.pnl_pct = (pos.exit_price / entry_price - 1) * 100
-                pos.is_open = False
-                pos.exit_time = exit_time
-                pos.holding_minutes = pos.holding_days * 240 + _time_to_minutes(exit_time)
-                return pos
-        
-        # 5. 高开回落（当天高开后收在最低附近）
-        if i > 0:
+        # 高开回落
+        if i > buy_idx:
             prev_close = df.iloc[i-1]['close']
             open_pct = (row['open'] / prev_close - 1) * 100
-            close_vs_high = (current_close - current_high) / (current_high - current_low) * 100 if current_high > current_low else 50
-            if open_pct > 3 and close_vs_high < -50 and profit > 0:
-                # 高开3%+但收在最低附近+还有浮盈→锁定利润
+            range_pct = (current_high - current_low) / current_close * 100
+            close_position = (current_close - current_low) / (current_high - current_low) if current_high > current_low else 0.5
+            if open_pct > 3 and close_position < 0.2 and profit > 0:
                 pos.exit_date = current_date
                 pos.exit_price = current_close
                 pos.exit_reason = "高开回落"
@@ -201,7 +180,7 @@ def simulate_position(
                 pos.holding_minutes = pos.holding_days * 240
                 return pos
     
-    # 如果到数据末尾还没出场→期末平仓
+    # 期末平仓
     last_row = df.iloc[-1]
     pos.exit_date = str(last_row['trade_date'])
     pos.exit_price = last_row['close']
@@ -212,6 +191,102 @@ def simulate_position(
     pos.holding_minutes = pos.holding_days * 240
     
     return pos
+
+
+def _find_entry_time_minute(code, date_str, minute_df, signal_close):
+    """分时级别找买入时机
+    
+    逻辑：开盘后不追高，等回调到合理位置买入
+    - 开盘价如果低于信号日收盘价（低开）→ 开盘买入
+    - 开盘后回调到信号日收盘价附近 → 买入
+    - 如果全天没回调 → 14:30后确认走势买入
+    """
+    if minute_df is None or minute_df.empty:
+        return None, None
+    
+    day_data = _filter_minute_by_date(minute_df, date_str)
+    if day_data is None or len(day_data) < 10:
+        return None, None
+    
+    prices = day_data['close'].values
+    times = day_data['trade_time'].values if 'trade_time' in day_data.columns else None
+    
+    open_price = prices[0]
+    
+    # 场景1：低开 → 开盘买入
+    if open_price < signal_close:
+        time_str = str(times[0]) if times is not None else "09:30"
+        return open_price, f"{date_str} {time_str[-5:] if len(str(time_str)) >= 5 else '09:30'}"
+    
+    # 场景2：开盘后回调到信号日收盘价附近（±0.5%）
+    for i in range(min(30, len(prices))):  # 前30分钟
+        if prices[i] <= signal_close * 1.005:  # 回调到收盘价附近
+            time_str = str(times[i]) if times is not None else "09:45"
+            t = time_str[-5:] if len(str(time_str)) >= 5 else "09:45"
+            return prices[i], f"{date_str} {t}"
+    
+    # 场景3：如果上午没回调，看下午有没有回调
+    for i in range(len(prices) // 2, len(prices)):
+        if prices[i] <= signal_close * 1.01:  # 允许稍微高一点
+            time_str = str(times[i]) if times is not None else "14:00"
+            t = time_str[-5:] if len(str(time_str)) >= 5 else "14:00"
+            return prices[i], f"{date_str} {t}"
+    
+    # 场景4：全天没回调，尾盘买入
+    time_str = str(times[-1]) if times is not None else "15:00"
+    t = time_str[-5:] if len(str(time_str)) >= 5 else "15:00"
+    return prices[-1], f"{date_str} {t}"
+
+
+def _check_intraday_exit(code, date_str, entry_price, minute_df, stop_loss, take_profit, peak_profit):
+    """分时级别出场检查
+    
+    返回 (exit_time, exit_price, exit_reason) 或 None
+    每天的分钟数据逐根检查
+    """
+    if minute_df is None or minute_df.empty:
+        return None
+    
+    day_data = _filter_minute_by_date(minute_df, date_str)
+    if day_data is None or len(day_data) < 20:
+        return None
+    
+    prices = day_data['close'].values
+    times = day_data['trade_time'].values if 'trade_time' in day_data.columns else None
+    
+    # 计算分时MACD
+    dif_m, dea_m, macd_m = _calc_macd(prices, fast=5, slow=13, signal=4)
+    
+    day_peak = 0  # 当天峰值
+    
+    for i in range(5, len(prices)):
+        price = prices[i]
+        profit = (price / entry_price - 1) * 100
+        day_peak = max(day_peak, profit)
+        
+        time_str = str(times[i]) if times is not None else "15:00"
+        t = time_str[-5:] if len(str(time_str)) >= 5 else "15:00"
+        
+        # 1. 止损
+        if profit <= stop_loss:
+            return f"{date_str} {t}", price, "止损"
+        
+        # 2. 止盈
+        if profit >= take_profit:
+            return f"{date_str} {t}", price, "目标止盈"
+        
+        # 3. 分时红柱拐头（核心alpha）
+        if i >= 2 and macd_m[i] > 0:
+            if macd_m[i] < macd_m[i-1] and macd_m[i-1] < macd_m[i-2]:
+                # 红柱连续缩短2根 + 有浮盈
+                if profit >= 5.0 and day_peak >= profit + 1:
+                    return f"{date_str} {t}", price, "分时红柱拐头"
+        
+        # 4. 盘中冲高回落（利润回吐超过3%）
+        if day_peak >= 8.0 and profit < day_peak - 3.0:
+            return f"{date_str} {t}", price, "盘中冲高回落"
+    
+    return None
 
 
 def _calc_macd(close: np.ndarray, fast=12, slow=26, signal=9):

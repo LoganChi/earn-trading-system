@@ -88,12 +88,11 @@ def simulate_position(
     buy_idx = signal_idx + 1
     buy_date = str(df.iloc[buy_idx]['trade_date'])
     
-    # 分时级别找买入时机：第二天开盘后等回调
+    # 分时级别找买入时机：MACD与价格协同确认
     entry_price, entry_time = _find_entry_time_minute(code, buy_date, minute_df, df.iloc[signal_idx]['close'])
     if entry_price is None:
-        # 无法从分时找到入场点，用次日开盘价
-        entry_price = df.iloc[buy_idx]['open']
-        entry_time = f"{buy_date} 09:30"
+        # 全天没有MACD+价格协同信号 → 不入场（放弃这个信号）
+        return None
     
     pos = Position(
         code=code, name=name,
@@ -194,48 +193,62 @@ def simulate_position(
 
 
 def _find_entry_time_minute(code, date_str, minute_df, signal_close):
-    """分时级别找买入时机
+    """分时级别找买入时机：MACD与价格协同确认
     
-    逻辑：开盘后不追高，等回调到合理位置买入
-    - 开盘价如果低于信号日收盘价（低开）→ 开盘买入
-    - 开盘后回调到信号日收盘价附近 → 买入
-    - 如果全天没回调 → 14:30后确认走势买入
+    核心逻辑：
+    不是"看到回调就买"，而是等MACD红柱放大+价格同步突破的时刻
+    
+    判断条件（同时满足）：
+    1. 分时MACD柱 > 0（红柱区间）
+    2. 分时MACD柱在放大（当前 > 前一根）
+    3. 价格突破近期高点（前面N根的最高价）
+    4. 如果MACD红柱放大但价格没突破→跳过（假信号）
+    
+    如果全天没有协同信号→不入场（返回None）
     """
     if minute_df is None or minute_df.empty:
         return None, None
     
     day_data = _filter_minute_by_date(minute_df, date_str)
-    if day_data is None or len(day_data) < 10:
+    if day_data is None or len(day_data) < 30:
         return None, None
     
     prices = day_data['close'].values
     times = day_data['trade_time'].values if 'trade_time' in day_data.columns else None
     
-    open_price = prices[0]
+    # 计算分时MACD
+    dif_m, dea_m, macd_m = _calc_macd(prices, fast=5, slow=13, signal=4)
     
-    # 场景1：低开 → 开盘买入
-    if open_price < signal_close:
-        time_str = str(times[0]) if times is not None else "09:30"
-        return open_price, f"{date_str} {time_str[-5:] if len(str(time_str)) >= 5 else '09:30'}"
+    # 追踪窗口高点（用前20根作为参照）
+    window = 20
     
-    # 场景2：开盘后回调到信号日收盘价附近（±0.5%）
-    for i in range(min(30, len(prices))):  # 前30分钟
-        if prices[i] <= signal_close * 1.005:  # 回调到收盘价附近
-            time_str = str(times[i]) if times is not None else "09:45"
-            t = time_str[-5:] if len(str(time_str)) >= 5 else "09:45"
-            return prices[i], f"{date_str} {t}"
+    for i in range(max(window, 5), len(prices)):
+        # 条件1: MACD柱为正
+        if macd_m[i] <= 0:
+            continue
+        
+        # 条件2: MACD柱在放大
+        if macd_m[i] <= macd_m[i-1]:
+            continue
+        
+        # 条件3: 价格突破窗口高点
+        window_high = np.max(prices[i-window:i])
+        if prices[i] <= window_high:
+            continue
+        
+        # 条件4: 价格突破幅度≥0.3%（不是一分钱的波动）
+        breakout_pct = (prices[i] / window_high - 1) * 100
+        if breakout_pct < 0.3:
+            continue
+        
+        # 协同确认：MACD红柱放大 + 价格突破 = 买入
+        time_str = str(times[i]) if times is not None else "10:00"
+        t = time_str[-5:] if len(str(time_str)) >= 5 else "10:00"
+        
+        return prices[i], f"{date_str} {t}"
     
-    # 场景3：如果上午没回调，看下午有没有回调
-    for i in range(len(prices) // 2, len(prices)):
-        if prices[i] <= signal_close * 1.01:  # 允许稍微高一点
-            time_str = str(times[i]) if times is not None else "14:00"
-            t = time_str[-5:] if len(str(time_str)) >= 5 else "14:00"
-            return prices[i], f"{date_str} {t}"
-    
-    # 场景4：全天没回调，尾盘买入
-    time_str = str(times[-1]) if times is not None else "15:00"
-    t = time_str[-5:] if len(str(time_str)) >= 5 else "15:00"
-    return prices[-1], f"{date_str} {t}"
+    # 全天没有MACD+价格协同信号 → 不入场
+    return None, None
 
 
 def _check_intraday_exit(code, date_str, entry_price, minute_df, stop_loss, take_profit, peak_profit):

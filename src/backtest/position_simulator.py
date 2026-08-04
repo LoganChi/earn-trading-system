@@ -281,7 +281,12 @@ def _check_intraday_exit(code, date_str, entry_price, minute_df, stop_loss, take
         day_peak = max(day_peak, profit)
         
         time_str = str(times[i]) if times is not None else "15:00"
-        t = time_str[-5:] if len(str(time_str)) >= 5 else "15:00"
+        if ' ' in time_str and ':' in time_str:
+            t = time_str.split(' ')[-1][:5]
+        elif len(time_str) >= 5:
+            t = time_str[-5:]
+        else:
+            t = "15:00"
         
         # 1. 止损
         if profit <= stop_loss:
